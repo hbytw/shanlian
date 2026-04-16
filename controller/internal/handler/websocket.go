@@ -126,16 +126,20 @@ func NewWebSocketHandler(jwtManager *jwt.JWTManager) *WebSocketHandler {
 
 func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 	// 验证 token
-	authHeader := c.GetHeader("Authorization")
-	if authHeader == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少认证令牌"})
-		return
-	}
-
-	// 解析 Bearer token
 	tokenString := ""
+
+	// 优先从 Authorization header 获取
+	authHeader := c.GetHeader("Authorization")
 	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
 		tokenString = authHeader[7:]
+	} else {
+		// 如果没有 header，从 query param 获取
+		tokenString = c.Query("token")
+	}
+
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少认证令牌"})
+		return
 	}
 
 	claims, err := h.jwtManager.ValidateAccessToken(tokenString)
