@@ -152,6 +152,14 @@ func (r *UserRepository) List(ctx context.Context, params *model.PageParams) ([]
 		argIdx++
 	}
 
+	// 角色过滤
+	if params.Role != "" {
+		countQuery += fmt.Sprintf(" AND role = $%d", argIdx)
+		listQuery += fmt.Sprintf(" AND role = $%d", argIdx)
+		args = append(args, params.Role)
+		argIdx++
+	}
+
 	// 获取总数
 	var total int64
 	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)

@@ -80,7 +80,28 @@ func (s *UserService) Get(ctx context.Context, id uuid.UUID) (*model.User, error
 	return user, nil
 }
 
-func (s *UserService) List(ctx context.Context, params *model.PageParams) (*model.UserListResponse, error) {
+func (s *UserService) List(ctx context.Context, params *model.PageParams, operatorID uuid.UUID, operatorRole string) (*model.UserListResponse, error) {
+	// network_admin 只能看到 user 角色的普通用户
+	// user 只能看到自己
+	// super_admin 可以看所有
+	if operatorRole == "network_admin" {
+		// network_admin 只能看普通用户和自己的信息
+		params.Role = "user" // 添加角色过滤
+	}
+	if operatorRole == "user" {
+		// user 只能看自己
+		users, total, err := s.userRepo.GetByID(ctx, operatorID)
+		if err != nil {
+			return nil, err
+		}
+		return &model.UserListResponse{
+			Users:  []model.User{*users},
+			Total:  1,
+			Page:   1,
+			Limit:  1,
+		}, nil
+	}
+
 	users, total, err := s.userRepo.List(ctx, params)
 	if err != nil {
 		return nil, err

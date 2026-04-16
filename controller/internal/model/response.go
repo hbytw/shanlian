@@ -110,6 +110,7 @@ type PageParams struct {
 	Search string `form:"search"`
 	Sort   string `form:"sort"`
 	Order  string `form:"order" binding:"omitempty,oneof=asc desc"`
+	Role   string `form:"role"` // 用于权限过滤
 }
 
 // GetOffset 计算偏移量

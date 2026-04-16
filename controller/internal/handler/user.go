@@ -117,7 +117,11 @@ func (h *UserHandler) List(c *gin.Context) {
 		params.Limit = 20
 	}
 
-	resp, err := h.userService.List(c.Request.Context(), &params)
+	// 获取当前用户角色
+	operatorRole := c.GetString("role")
+	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+
+	resp, err := h.userService.List(c.Request.Context(), &params, operatorID, operatorRole)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
