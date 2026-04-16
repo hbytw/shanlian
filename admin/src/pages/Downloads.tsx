@@ -43,7 +43,7 @@ export function DownloadsPage() {
   const fetchVersions = async () => {
     setLoading(true)
     try {
-      const res = await get<ClientVersion[]>('/admin/versions/client')
+      const res = await get<ClientVersion[]>('/version/client')
       setVersions(res.data || [])
     } catch (error) {
       message.error('获取版本列表失败')

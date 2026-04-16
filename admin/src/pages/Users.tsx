@@ -17,8 +17,8 @@ export function UsersPage() {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const res = await get<{ users: User[]; total: number }>('/admin/users', params)
-      setUsers(res.data?.users || [])
+      const res = await get<User[]>('/admin/users', params)
+      setUsers(res.data || [])
     } catch (error) {
       message.error('获取用户列表失败')
     } finally {
