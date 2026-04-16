@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Tag, Switch, InputNumber, Alert } from 'antd'
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, ClusterOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Tag, Switch, Alert } from 'antd'
+import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, ClusterOutlined } from '@ant-design/icons'
 import { get, post, put, del } from '../services/api'
 import type { Network, PageParams } from '../types/api'
 
@@ -12,7 +12,7 @@ export function NetworksPage() {
   const [form] = Form.useForm()
   const [params, setParams] = useState<PageParams>({ page: 1, limit: 20 })
   const [autoAllocate, setAutoAllocate] = useState(true)
-  const [requiredSize, setRequiredSize] = useState(254)
+  const [requiredSize] = useState(254)
 
   const fetchNetworks = async () => {
     setLoading(true)

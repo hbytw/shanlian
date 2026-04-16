@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Card, Row, Col, Statistic, Typography, Button, Progress, List, Tag, Space } from 'antd'
-import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined, GlobalOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowUpOutlined, ArrowDownOutlined, LineChartOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { get } from '../services/api'
 import type { StatsRealtime, StatsOverview, MoonNode } from '../types/api'

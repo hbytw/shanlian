@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Row, Col, Statistic, Tag, Space, Button, Table, Typography, Descriptions, message, Progress } from 'antd'
+import { Card, Row, Col, Statistic, Tag, Button, Table, Typography, Descriptions, message, Progress } from 'antd'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeftOutlined, GlobalOutlined, TeamOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons'
 import { get } from '../services/api'

@@ -10,8 +10,8 @@ const { Title } = Typography
 
 export function LoginPage() {
   const [loading, setLoading] = useState(false)
-  const [sendingCode, setSendingCode] = useState(false)
-  const [codeSent, setCodeSent] = useState(false)
+  const [, setSendingCode] = useState(false)
+  const [, setCodeSent] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const navigate = useNavigate()
   const { setAuth } = useAuthStore()
