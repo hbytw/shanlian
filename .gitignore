@@ -1,0 +1,92 @@
+# 文档（禁止推送到 GitHub）
+*.md
+docs/
+.claude/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+._*
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.settings/
+
+# 编译产物
+*.o
+*.a
+*.so
+*.exe
+*.dll
+*.dylib
+*.class
+*.jar
+*.war
+*.ear
+target/
+build/
+dist/
+*.wasm
+
+# Go
+vendor/
+*.test
+coverage.out
+
+# Rust
+/target
+**/target
+*.rlib
+*.profraw
+*.prof
+*.snap
+
+# Node
+node_modules/
+.npm
+.yarn/
+.pnp.*
+.next/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# 日志和临时文件
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache/
+
+# 环境配置（包含敏感信息）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# 测试覆盖率
+*.coverhtml
+coverage/
+lcov.info
+.nyc_output/
+
+# Docker
+.dockerignore
