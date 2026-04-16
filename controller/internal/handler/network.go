@@ -45,6 +45,42 @@ func (h *NetworkHandler) Create(c *gin.Context) {
 	})
 }
 
+// Allocate 自动分配网段
+func (h *NetworkHandler) Allocate(c *gin.Context) {
+	var req struct {
+		Name string `json:"name" binding:"required"`
+		Size int    `json:"size" binding:"required,min=2,max=65534"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
+			model.ErrSystemValidatationFailed,
+			"请求参数错误："+err.Error(),
+			nil,
+		))
+		return
+	}
+
+	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	network, err := h.networkService.AllocateCIDR(c.Request.Context(), req.Name, req.Size)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err == service.ErrNetworkNoAvailableIP {
+			status = http.StatusConflict
+		}
+		c.JSON(status, model.NewErrorResponse(
+			model.ErrNetworkCIDRConflict,
+			"分配网段失败："+err.Error(),
+			nil,
+		))
+		return
+	}
+
+	c.JSON(http.StatusCreated, model.SuccessResponse{
+		Message: "网段分配成功",
+		Data:    network,
+	})
+}
+
 func (h *NetworkHandler) Get(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := uuid.Parse(idStr)

@@ -59,7 +59,34 @@ export function TrafficChartPage() {
   const fetchTrafficData = async () => {
     setLoading(true)
     try {
-      const res = await get<TrafficData[]>(`/admin/stats/traffic?range=${timeRange}`)
+      // 计算时间范围
+      const now = new Date()
+      let startTime: Date
+      let groupBy = 'hour'
+      switch (timeRange) {
+        case '1h':
+          startTime = new Date(now.getTime() - 60 * 60 * 1000)
+          groupBy = 'hour'
+          break
+        case '24h':
+          startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+          groupBy = 'hour'
+          break
+        case '7d':
+          startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          groupBy = 'day'
+          break
+        case '30d':
+          startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+          groupBy = 'day'
+          break
+      }
+      const params = new URLSearchParams({
+        start_time: startTime.toISOString(),
+        end_time: now.toISOString(),
+        group_by: groupBy,
+      })
+      const res = await get<TrafficData[]>(`/admin/stats/traffic?${params}`)
       const data = res.data || []
       setTrafficData(data)
       calculateStats(data)

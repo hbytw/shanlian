@@ -69,10 +69,12 @@ func main() {
 	peerRepo := repository.NewPeerRepository(db)
 	policyRepo := repository.NewPolicyRepository(db)
 	auditRepo := repository.NewAuditRepository(db)
+	versionRepo := repository.NewVersionRepository(db)
 
 	// ============================================================
 	// 初始化服务层
 	// ============================================================
+	versionService := service.NewVersionService(versionRepo, auditRepo, os.Getenv("VERSION_UPLOAD_DIR"))
 	authService := service.NewAuthService(userRepo, jwtManager, auditRepo, verifyCodeManager)
 	userService := service.NewUserService(userRepo, networkRepo, auditRepo)
 	networkService := service.NewNetworkService(networkRepo, peerRepo, userRepo, moonRepo, auditRepo)
@@ -95,6 +97,7 @@ func main() {
 	policyHandler := handler.NewPolicyHandler(policyService)
 	statsHandler := handler.NewStatsHandler(statsService)
 	auditHandler := handler.NewAuditHandler(auditService)
+	versionHandler := handler.NewVersionHandler(versionService)
 	wsHandler := handler.NewWebSocketHandler(jwtManager)
 
 	// ============================================================
@@ -160,6 +163,7 @@ func main() {
 			{
 				networks.GET("", networkHandler.List)
 				networks.POST("", networkHandler.Create)
+				networks.POST("/allocate", networkHandler.Allocate)
 				networks.GET("/:id", networkHandler.Get)
 				networks.PUT("/:id", networkHandler.Update)
 				networks.DELETE("/:id", networkHandler.Delete)
@@ -238,9 +242,9 @@ func main() {
 			// 版本管理
 			versions := admin.Group("/versions")
 			{
-				versions.POST("", authHandler.UploadVersion)
-				versions.GET("", authHandler.ListVersions)
-				versions.DELETE("/:id", authHandler.DeleteVersion)
+				versions.POST("", versionHandler.UploadVersion)
+				versions.GET("", versionHandler.ListVersions)
+				versions.DELETE("/:id", versionHandler.DeleteVersion)
 			}
 		}
 

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Table, Button, Tag, Space, Modal, Form, Input, Select, Upload, message } from 'antd'
 import { DeleteOutlined, UploadOutlined } from '@ant-design/icons'
-import { del } from '../services/api'
+import { get, post, del } from '../services/api'
 import type { PageParams } from '../types/api'
 
 interface Version {
@@ -18,18 +18,29 @@ interface Version {
 }
 
 export function VersionsPage() {
-  const [versions] = useState<Version[]>([])
+  const [versions, setVersions] = useState<Version[]>([])
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [form] = Form.useForm()
   const [params] = useState<PageParams>({ page: 1, limit: 20 })
+  const [uploading, setUploading] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
 
-  // 预留：获取版本列表
   const fetchVersions = async () => {
     setLoading(true)
-    // TODO: 调用 API 获取版本列表
-    setLoading(false)
+    try {
+      const res = await get<Version[]>('/admin/versions')
+      setVersions(res.data || [])
+    } catch (error) {
+      message.error('获取版本列表失败')
+    } finally {
+      setLoading(false)
+    }
   }
+
+  useEffect(() => {
+    fetchVersions()
+  }, [])
 
   const handleDelete = async (id: string) => {
     try {
@@ -45,12 +56,29 @@ export function VersionsPage() {
     setModalVisible(true)
   }
 
-  const handleSubmit = async (_values: Record<string, unknown>) => {
+  const handleSubmit = async (values: Record<string, unknown>) => {
+    if (!file) {
+      message.error('请选择要上传的文件')
+      return
+    }
+    setUploading(true)
     try {
-      message.info('版本上传功能开发中')
+      const formData = new FormData()
+      formData.append('version', values.version as string)
+      formData.append('min_supported', values.min_supported as string)
+      formData.append('platform', values.platform as string)
+      formData.append('force_update', String(values.force_update || false))
+      formData.append('file', file)
+      await post('/admin/versions', formData)
+      message.success('上传成功')
       setModalVisible(false)
+      setFile(null)
+      form.resetFields()
+      fetchVersions()
     } catch (error) {
       message.error('上传失败')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -180,7 +208,13 @@ export function VersionsPage() {
             rules={[{ required: true, message: '请上传安装包' }]}
             extra="支持 .exe/.dmg/.deb/.apk 等格式，最大 500MB"
           >
-            <Upload beforeUpload={() => false}>
+            <Upload
+              beforeUpload={(f) => {
+                setFile(f)
+                return false
+              }}
+              maxCount={1}
+            >
               <Button icon={<UploadOutlined />}>选择文件</Button>
             </Upload>
           </Form.Item>
@@ -192,7 +226,7 @@ export function VersionsPage() {
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">
+              <Button type="primary" htmlType="submit" loading={uploading}>
                 上传
               </Button>
               <Button onClick={() => setModalVisible(false)}>取消</Button>

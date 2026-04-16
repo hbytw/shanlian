@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/hbytw/shanlian/controller/internal/crypto"
@@ -258,7 +259,7 @@ func (s *AuthService) ResetPasswordByCode(ctx context.Context, target, code, new
 	// 获取用户
 	var user *model.User
 	if target != "" {
-		if contains(target, "@") {
+		if strings.Contains(target, "@") {
 			user, err = s.userRepo.GetByEmail(ctx, target)
 		} else {
 			user, err = s.userRepo.GetByPhone(ctx, target)

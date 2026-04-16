@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Table, Tabs, DatePicker, Space, Button, Tag, Select, message, Modal } from 'antd'
 import { DownloadOutlined, ReloadOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
-import { get, post } from '../services/api'
+import { get } from '../services/api'
 import type { PageParams } from '../types/api'
 
 const { RangePicker } = DatePicker
@@ -62,32 +62,27 @@ export function LogsPage() {
             options={[
               { label: 'CSV', value: 'csv' },
               { label: 'JSON', value: 'json' },
-              { label: 'Excel', value: 'xlsx' },
             ]}
           />
         </Space>
       ),
       onOk: async () => {
         const formatSelect = document.getElementById('export-format') as HTMLSelectElement
-        const format = (formatSelect?.value || 'csv') as 'csv' | 'json' | 'xlsx'
+        const format = (formatSelect?.value || 'csv') as 'csv' | 'json'
         setExportLoading(true)
         try {
-          const queryParams: Record<string, unknown> = {}
+          const queryParams: Record<string, string> = {
+            log_type: activeTab,
+            format,
+            limit: '10000', // 导出大量数据
+          }
           if (dateRange) {
             queryParams.start_time = dateRange[0]
             queryParams.end_time = dateRange[1]
           }
-          const res = await post<{ url?: string }>('/admin/logs/export', {
-            log_type: activeTab,
-            format,
-            ...queryParams,
-          })
-          if (res.data?.url) {
-            window.open(res.data.url, '_blank')
-            message.success('导出开始，请等待下载')
-          } else {
-            message.info('导出功能开发中')
-          }
+          const queryString = new URLSearchParams(queryParams).toString()
+          window.open(`/api/v1/admin/logs/export?${queryString}`, '_blank')
+          message.success('导出开始，请等待下载')
         } catch (error) {
           message.error('导出失败')
         } finally {
