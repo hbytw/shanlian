@@ -90,12 +90,20 @@ func (s *UserService) List(ctx context.Context, params *model.PageParams, operat
 	}
 	if operatorRole == "user" {
 		// user 只能看自己
-		users, total, err := s.userRepo.GetByID(ctx, operatorID)
+		user, err := s.userRepo.GetByID(ctx, operatorID)
 		if err != nil {
 			return nil, err
 		}
+		if user == nil {
+			return &model.UserListResponse{
+				Users:  []model.User{},
+				Total:  0,
+				Page:   1,
+				Limit:  1,
+			}, nil
+		}
 		return &model.UserListResponse{
-			Users:  []model.User{*users},
+			Users:  []model.User{*user},
 			Total:  1,
 			Page:   1,
 			Limit:  1,
