@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  controller:
+    build:
+      context: ./controller
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://shanlian:shanlian@127.0.0.1:5432/shanlian?sslmode=disable
+      REDIS_URL: redis://127.0.0.1:6379/0
+      JWT_SECRET: ${JWT_SECRET:-shanlian-jwt-secret-change-in-production}
+      GIN_MODE: ${GIN_MODE:-release}
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    network_mode: host

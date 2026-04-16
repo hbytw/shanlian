@@ -1,0 +1,56 @@
+package model
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type Peer struct {
+	ID          uuid.UUID  `json:"id"`
+	DeviceID    uuid.UUID  `json:"device_id"`
+	NetworkID   uuid.UUID  `json:"network_id"`
+	PublicIP    *string    `json:"public_ip,omitempty"`
+	PublicPort  *int       `json:"public_port,omitempty"`
+	NATType     string     `json:"nat_type"`
+	Online      bool       `json:"online"`
+	AssignedIP  string     `json:"assigned_ip"`
+	Hostname    *string    `json:"hostname,omitempty"`
+	TunnelType  string     `json:"tunnel_type"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
+}
+
+type PeerRegisterRequest struct {
+	DeviceID   string `json:"device_id" binding:"required"`
+	NetworkID  string `json:"network_id" binding:"required"`
+	PublicIP   string `json:"public_ip"`
+	PublicPort int    `json:"public_port"`
+	NATType    string `json:"nat_type"`
+	AssignedIP string `json:"assigned_ip" binding:"required"`
+	Hostname   string `json:"hostname"`
+	TunnelType string `json:"tunnel_type"`
+}
+
+type PeerHeartbeatRequest struct {
+	PeerID  string `json:"peer_id" binding:"required"`
+	Status  string `json:"status"`
+}
+
+type PeerDiscoverRequest struct {
+	NetworkID string `json:"network_id" binding:"required"`
+	PeerIP    string `json:"peer_ip"`
+}
+
+type PeerDiscoverResponse struct {
+	Peers []PeerInfo `json:"peers"`
+}
+
+type PeerInfo struct {
+	PeerID    string `json:"peer_id"`
+	PublicIP  string `json:"public_ip"`
+	PublicPort int   `json:"public_port"`
+	NATType   string `json:"nat_type"`
+	Online    bool   `json:"online"`
+}
