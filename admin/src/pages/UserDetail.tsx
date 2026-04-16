@@ -29,16 +29,24 @@ export function UserDetailPage() {
     if (!id) return
     setLoading(true)
     try {
-      const [userRes, devicesRes, peersRes, statsRes] = await Promise.all([
+      const [userRes] = await Promise.all([
         get<User>(`/admin/users/${id}`),
-        get<Device[]>(`/admin/users/${id}/devices`),
-        get<Peer[]>(`/admin/users/${id}/peers`),
-        get<UserStats>(`/admin/users/${id}/stats`),
       ])
       setUser(userRes.data || null)
-      setDevices(devicesRes.data || [])
-      setPeers(peersRes.data || [])
-      setStats(statsRes.data || null)
+
+      // 这些API可能不存在，静默处理
+      try {
+        const [devicesRes, peersRes, statsRes] = await Promise.all([
+          get<Device[]>(`/admin/users/${id}/devices`),
+          get<Peer[]>(`/admin/users/${id}/peers`),
+          get<UserStats>(`/admin/users/${id}/stats`),
+        ])
+        setDevices(devicesRes.data || [])
+        setPeers(peersRes.data || [])
+        setStats(statsRes.data || null)
+      } catch {
+        // API不存在，忽略错误
+      }
     } catch (error) {
       message.error('获取用户详情失败')
     } finally {
@@ -55,7 +63,7 @@ export function UserDetailPage() {
     const k = 1024
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i])
   }
 
   const deviceColumns = [
@@ -140,7 +148,7 @@ export function UserDetailPage() {
         </Col>
         <Col span={8}>
           <Card title="用户统计">
-            <Statistic title="注册天数" value={stats?.created_days || 0} suffix="天" />
+            <Statistic title="注册天数" value={stats?.created_days || Math.floor((Date.now() - new Date(user.created_at).getTime()) / (1000 * 60 * 60 * 24))} suffix="天" />
             <Statistic title="关联设备" value={stats?.total_devices || 0} style={{ marginTop: 16 }} />
             <Statistic title="在线设备" value={stats?.online_devices || 0} style={{ marginTop: 16 }} />
             <Statistic title="加入网络" value={stats?.total_networks || 0} style={{ marginTop: 16 }} />
@@ -157,23 +165,27 @@ export function UserDetailPage() {
         </Col>
       </Row>
 
-      <Card title="关联设备" style={{ marginBottom: 24 }}>
-        <Table
-          columns={deviceColumns}
-          dataSource={devices}
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
-        />
-      </Card>
+      {devices.length > 0 && (
+        <Card title="关联设备" style={{ marginBottom: 24 }}>
+          <Table
+            columns={deviceColumns}
+            dataSource={devices}
+            rowKey="id"
+            pagination={{ pageSize: 10 }}
+          />
+        </Card>
+      )}
 
-      <Card title="网络节点">
-        <Table
-          columns={peerColumns}
-          dataSource={peers}
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
-        />
-      </Card>
+      {peers.length > 0 && (
+        <Card title="网络节点">
+          <Table
+            columns={peerColumns}
+            dataSource={peers}
+            rowKey="id"
+            pagination={{ pageSize: 10 }}
+          />
+        </Card>
+      )}
     </div>
   )
 }
