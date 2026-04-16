@@ -20,18 +20,19 @@ import { useAuthStore } from '../store/auth'
 const { Header, Sider, Content } = AntLayout
 const { Title } = Typography
 
-const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
-  { key: '/users', icon: <UserOutlined />, label: '用户管理' },
-  { key: '/networks', icon: <GlobalOutlined />, label: '网络管理' },
-  { key: '/moons', icon: <ClusterOutlined />, label: 'Moon 节点' },
-  { key: '/devices', icon: <MobileOutlined />, label: '设备管理' },
-  { key: '/policies', icon: <SecurityScanOutlined />, label: '策略管理' },
-  { key: '/logs', icon: <FileTextOutlined />, label: '日志审计' },
-  { key: '/stats', icon: <DashboardOutlined />, label: '监控统计' },
-  { key: '/versions', icon: <DownloadOutlined />, label: '版本管理' },
-  { key: '/downloads', icon: <DownloadOutlined />, label: '客户端下载' },
-  { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+// 菜单配置
+const menuItemsConfig = [
+  { key: '/', icon: <DashboardOutlined />, label: '仪表盘', roles: ['super_admin', 'network_admin', 'user'] },
+  { key: '/users', icon: <UserOutlined />, label: '用户管理', roles: ['super_admin'] },
+  { key: '/networks', icon: <GlobalOutlined />, label: '网络管理', roles: ['super_admin', 'network_admin'] },
+  { key: '/moons', icon: <ClusterOutlined />, label: 'Moon 节点', roles: ['super_admin', 'network_admin'] },
+  { key: '/devices', icon: <MobileOutlined />, label: '设备管理', roles: ['super_admin', 'network_admin', 'user'] },
+  { key: '/policies', icon: <SecurityScanOutlined />, label: '策略管理', roles: ['super_admin', 'network_admin'] },
+  { key: '/logs', icon: <FileTextOutlined />, label: '日志审计', roles: ['super_admin', 'network_admin'] },
+  { key: '/stats', icon: <DashboardOutlined />, label: '监控统计', roles: ['super_admin', 'network_admin', 'user'] },
+  { key: '/versions', icon: <DownloadOutlined />, label: '版本管理', roles: ['super_admin'] },
+  { key: '/downloads', icon: <DownloadOutlined />, label: '客户端下载', roles: ['super_admin', 'network_admin', 'user'] },
+  { key: '/settings', icon: <SettingOutlined />, label: '系统设置', roles: ['super_admin'] },
 ]
 
 export function Layout() {
@@ -39,6 +40,12 @@ export function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, clearAuth } = useAuthStore()
+  const userRole = user?.role || 'user'
+
+  // 根据角色过滤菜单
+  const menuItems = menuItemsConfig
+    .filter(item => item.roles.includes(userRole))
+    .map(({ roles, ...rest }) => rest)
 
   const handleLogout = () => {
     clearAuth()
