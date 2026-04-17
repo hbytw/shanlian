@@ -70,6 +70,7 @@ func main() {
 	policyRepo := repository.NewPolicyRepository(db)
 	auditRepo := repository.NewAuditRepository(db)
 	versionRepo := repository.NewVersionRepository(db.DB)
+	settingsRepo := repository.NewSettingsRepository(db.DB)
 
 	// ============================================================
 	// 初始化服务层
@@ -84,6 +85,7 @@ func main() {
 	policyService := service.NewPolicyService(policyRepo, networkRepo, auditRepo)
 	statsService := service.NewStatsService(peerRepo, deviceRepo, moonRepo, networkRepo, auditRepo)
 	auditService := service.NewAuditService(auditRepo)
+	settingsService := service.NewSettingsService(settingsRepo)
 
 	// ============================================================
 	// 初始化处理器层
@@ -99,6 +101,7 @@ func main() {
 	auditHandler := handler.NewAuditHandler(auditService)
 	versionHandler := handler.NewVersionHandler(versionService)
 	wsHandler := handler.NewWebSocketHandler(jwtManager)
+	settingsHandler := handler.NewSettingsHandler(settingsService)
 
 	// ============================================================
 	// 初始化 Gin 路由器
@@ -245,6 +248,22 @@ func main() {
 				versions.POST("", versionHandler.UploadVersion)
 				versions.GET("", versionHandler.ListVersions)
 				versions.DELETE("/:id", versionHandler.DeleteVersion)
+			}
+
+			// 系统设置
+			settings := admin.Group("/settings")
+			{
+				settings.GET("/platform", settingsHandler.GetPlatform)
+				settings.PUT("/platform", settingsHandler.UpdatePlatform)
+				settings.GET("/smtp", settingsHandler.GetSmtp)
+				settings.PUT("/smtp", settingsHandler.UpdateSmtp)
+				settings.POST("/smtp/test", settingsHandler.TestSmtp)
+				settings.GET("/webhook", settingsHandler.GetWebhook)
+				settings.PUT("/webhook", settingsHandler.UpdateWebhook)
+				settings.POST("/webhook/:type/test", settingsHandler.TestWebhook)
+				settings.GET("/cert", settingsHandler.GetCert)
+				settings.PUT("/cert", settingsHandler.UpdateCert)
+				settings.POST("/cert/verify", settingsHandler.VerifyCert)
 			}
 		}
 
