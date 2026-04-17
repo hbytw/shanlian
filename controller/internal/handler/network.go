@@ -60,8 +60,8 @@ func (h *NetworkHandler) Allocate(c *gin.Context) {
 		return
 	}
 
-	_, _ = uuid.Parse(c.GetString("user_id")) // TODO: 审计日志需要 operatorID
-	network, err := h.networkService.AllocateCIDR(c.Request.Context(), req.Name, req.Size)
+	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	network, err := h.networkService.AllocateCIDR(c.Request.Context(), req.Name, req.Size, operatorID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err == service.ErrNetworkNoAvailableIP {

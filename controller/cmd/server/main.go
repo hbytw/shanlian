@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/hbytw/shanlian/controller/internal/handler"
 	"github.com/hbytw/shanlian/controller/internal/middleware"
 	"github.com/hbytw/shanlian/controller/internal/model"
 	"github.com/hbytw/shanlian/controller/internal/repository"
 	"github.com/hbytw/shanlian/controller/internal/service"
+	"github.com/hbytw/shanlian/controller/pkg/event"
 	"github.com/hbytw/shanlian/controller/pkg/jwt"
 	"github.com/hbytw/shanlian/controller/pkg/nonce"
 	"github.com/hbytw/shanlian/controller/pkg/verifycode"
@@ -76,7 +78,7 @@ func main() {
 	// 初始化服务层
 	// ============================================================
 	versionService := service.NewVersionService(versionRepo, auditRepo, os.Getenv("VERSION_UPLOAD_DIR"))
-	authService := service.NewAuthService(userRepo, jwtManager, auditRepo, verifyCodeManager)
+	authService := service.NewAuthService(userRepo, versionRepo, jwtManager, auditRepo, verifyCodeManager)
 	userService := service.NewUserService(userRepo, networkRepo, auditRepo)
 	networkService := service.NewNetworkService(networkRepo, peerRepo, userRepo, moonRepo, auditRepo)
 	deviceService := service.NewDeviceService(deviceRepo, userRepo, networkRepo, auditRepo)
@@ -102,6 +104,39 @@ func main() {
 	versionHandler := handler.NewVersionHandler(versionService)
 	wsHandler := handler.NewWebSocketHandler(jwtManager)
 	settingsHandler := handler.NewSettingsHandler(settingsService)
+
+	// ============================================================
+	// 初始化事件订阅
+	// ============================================================
+	eventBus := event.GetEventBus()
+	eventBus.Subscribe(event.Subscriber{
+		EventTypes: []event.EventType{event.EventMoonOnline, event.EventMoonOffline},
+		Handler: func(e *event.Event) {
+			data := e.Data.(map[string]interface{})
+			moonID, _ := uuid.Parse(data["moon_id"].(string))
+			wsHandler.BroadcastMoonEvent(
+				moonID,
+				data["domain"].(string),
+				data["public_ip"].(string),
+				data["online"].(bool),
+			)
+		},
+	})
+	eventBus.Subscribe(event.Subscriber{
+		EventTypes: []event.EventType{event.EventPeerOnline, event.EventPeerOffline},
+		Handler: func(e *event.Event) {
+			data := e.Data.(map[string]interface{})
+			peerID, _ := uuid.Parse(data["peer_id"].(string))
+			networkID, _ := uuid.Parse(data["network_id"].(string))
+			wsHandler.BroadcastPeerEvent(
+				peerID,
+				data["device_id"].(string),
+				data["hostname"].(string),
+				networkID,
+				data["online"].(bool),
+			)
+		},
+	})
 
 	// ============================================================
 	// 初始化 Gin 路由器

@@ -173,6 +173,16 @@ func (r *PeerRepository) DeleteByNetwork(ctx context.Context, networkID, peerID 
 	return nil
 }
 
+// UpdateAssignedIP 更新节点的分配 IP
+func (r *PeerRepository) UpdateAssignedIP(ctx context.Context, id uuid.UUID, assignedIP string) error {
+	query := `UPDATE peers SET assigned_ip = $1, updated_at = NOW() WHERE id = $2`
+	_, err := r.db.ExecContext(ctx, query, assignedIP, id)
+	if err != nil {
+		return fmt.Errorf("更新节点 IP 失败：%w", err)
+	}
+	return nil
+}
+
 // GetOnlinePeers 获取在线节点
 func (r *PeerRepository) GetOnlinePeers(ctx context.Context) ([]model.Peer, error) {
 	query := `SELECT id, device_id, network_id, public_ip, public_port, nat_type, online,

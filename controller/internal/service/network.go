@@ -38,7 +38,7 @@ func NewNetworkService(networkRepo *repository.NetworkRepository, peerRepo *repo
 }
 
 // AllocateCIDR 自动分配网段（IPAM 算法）
-func (s *NetworkService) AllocateCIDR(ctx context.Context, networkName string, requiredSize int) (*model.Network, error) {
+func (s *NetworkService) AllocateCIDR(ctx context.Context, networkName string, requiredSize int, operatorID uuid.UUID) (*model.Network, error) {
 	// 获取所有现有网络
 	networks, _, err := s.networkRepo.List(ctx, &model.PageParams{Limit: 1000})
 	if err != nil {
@@ -102,7 +102,7 @@ func (s *NetworkService) AllocateCIDR(ctx context.Context, networkName string, r
 					CIDR:      cidr.String(),
 					GatewayIP: gatewayIP,
 				}
-				return s.Create(ctx, req, uuid.Nil)
+				return s.Create(ctx, req, operatorID)
 			}
 		}
 	}

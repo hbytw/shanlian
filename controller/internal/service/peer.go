@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -80,15 +81,34 @@ func (s *PeerService) ResetIP(ctx context.Context, id uuid.UUID, operatorID uuid
 		return ErrPeerNotFound
 	}
 
-	// TODO: 重新分配 IP
-	_ = peer
+	// 获取节点所属的网络
+	network, err := s.networkRepo.GetByID(ctx, peer.NetworkID)
+	if err != nil {
+		return err
+	}
+	if network == nil {
+		return errors.New("节点所属网络不存在")
+	}
 
+	// 从网络网段分配新的 IP
+	newIP, err := s.networkRepo.AllocatePeerIP(ctx, peer.NetworkID, id)
+	if err != nil {
+		return errors.New("分配新 IP 失败：" + err.Error())
+	}
+
+	// 更新节点的 IP
+	if err := s.peerRepo.UpdateAssignedIP(ctx, id, newIP); err != nil {
+		return errors.New("更新节点 IP 失败：" + err.Error())
+	}
+
+	detail, _ := json.Marshal(map[string]string{"old_ip": peer.AssignedIP, "new_ip": newIP})
 	s.auditRepo.LogAdmin(ctx, &model.AdminLog{
 		ID:           s.auditRepo.CreateAdminLogID(),
 		OperatorID:   operatorID,
 		Action:       "重置节点 IP",
 		ResourceType: "peer",
 		ResourceID:   &id,
+		Detail:       detail,
 	})
 
 	return nil

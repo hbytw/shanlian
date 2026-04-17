@@ -228,3 +228,54 @@ func (r *NetworkRepository) ListPeers(ctx context.Context, networkID uuid.UUID) 
 
 	return peers, nil
 }
+
+// AllocatePeerIP 为节点分配网络 IP
+func (r *NetworkRepository) AllocatePeerIP(ctx context.Context, networkID, peerID uuid.UUID) (string, error) {
+	network, err := r.GetByID(ctx, networkID)
+	if err != nil {
+		return "", err
+	}
+	if network == nil {
+		return "", fmt.Errorf("网络不存在")
+	}
+
+	// 获取网络下已分配的 IP 列表
+	query := `SELECT assigned_ip FROM peers WHERE network_id = $1 AND assigned_ip IS NOT NULL`
+	rows, err := r.db.QueryContext(ctx, query, networkID)
+	if err != nil {
+		return "", fmt.Errorf("查询已分配 IP 失败：%w", err)
+	}
+	defer rows.Close()
+
+	allocatedIPs := make(map[string]bool)
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return "", fmt.Errorf("扫描 IP 失败：%w", err)
+		}
+		allocatedIPs[ip] = true
+	}
+
+	// 从网关 IP 开始查找可用 IP
+	// 简单实现：网关 IP + 1 开始尝试分配
+	baseIP := network.GatewayIP
+	var ip3, ip4 int
+	_, _ = fmt.Sscanf(baseIP, "%d.%d.%d.%d", &ip3, &ip4, &ip3, &ip4)
+
+	// 解析网关 IP 的第三和第四个八位组
+	var a, b, c, d int
+	_, _ = fmt.Sscanf(baseIP, "%d.%d.%d.%d", &a, &b, &c, &d)
+	_ = a
+	_ = b
+
+	// 从 .4 开始分配（保留 .1-.3 给网关等）
+	start := 4
+	for i := start; i <= 254; i++ {
+		candidateIP := fmt.Sprintf("%d.%d.%d.%d", a, b, c, i)
+		if !allocatedIPs[candidateIP] {
+			return candidateIP, nil
+		}
+	}
+
+	return "", fmt.Errorf("无可用 IP 地址")
+}

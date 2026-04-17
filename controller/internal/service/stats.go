@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hbytw/shanlian/controller/internal/model"
 	"github.com/hbytw/shanlian/controller/internal/repository"
+	"github.com/hbytw/shanlian/controller/pkg/event"
 )
 
 // StatsService 统计服务
@@ -247,17 +249,24 @@ func (s *StatsService) BroadcastPeerEvent(ctx context.Context, peerID uuid.UUID,
 		return err
 	}
 
-	_ = map[string]interface{}{
-		"type":       "peer_event",
-		"event":      eventType,
-		"peer_id":    peerID,
-		"device_id":  peer.DeviceID,
-		"network_id": peer.NetworkID,
-		"online":     peer.Online,
-		"hostname":   peer.Hostname,
-		"timestamp":  time.Now().Unix(),
+	evtType := event.EventPeerOnline
+	if eventType == "offline" {
+		evtType = event.EventPeerOffline
 	}
 
-	// TODO: 通过 WebSocket 广播事件
+	evt := &event.Event{
+		Type:      evtType,
+		Timestamp: time.Now().Unix(),
+		Data: map[string]interface{}{
+			"peer_id":    peerID.String(),
+			"device_id":  peer.DeviceID,
+			"hostname":   peer.Hostname,
+			"network_id": peer.NetworkID.String(),
+			"online":     peer.Online,
+		},
+	}
+
+	event.GetEventBus().Publish(evt)
+	log.Printf("Peer 事件广播：%s, peer=%s, device=%s", eventType, peerID, peer.DeviceID)
 	return nil
 }

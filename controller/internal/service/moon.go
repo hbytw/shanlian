@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hbytw/shanlian/controller/internal/model"
 	"github.com/hbytw/shanlian/controller/internal/repository"
+	"github.com/hbytw/shanlian/controller/pkg/event"
 )
 
 var (
@@ -243,17 +244,23 @@ func (s *MoonService) BroadcastMoonEvent(ctx context.Context, moonID uuid.UUID, 
 		return err
 	}
 
-	_ = map[string]interface{}{
-		"type":       "moon_event",
-		"event":      eventType,
-		"moon_id":    moonID,
-		"domain":     moon.Domain,
-		"public_ip":  moon.PublicIP,
-		"online":     moon.Online,
-		"timestamp":  time.Now().Unix(),
+	evtType := event.EventMoonOnline
+	if eventType == "offline" {
+		evtType = event.EventMoonOffline
 	}
 
-	// TODO: 通过 WebSocket 广播事件
+	evt := &event.Event{
+		Type:      evtType,
+		Timestamp: time.Now().Unix(),
+		Data: map[string]interface{}{
+			"moon_id":   moonID,
+			"domain":    moon.Domain,
+			"public_ip": moon.PublicIP,
+			"online":    moon.Online,
+		},
+	}
+
+	event.GetEventBus().Publish(evt)
 	log.Printf("Moon 事件广播：%s, moon=%s, event=%s", eventType, moon.Domain, moon.PublicIP)
 	return nil
 }

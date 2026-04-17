@@ -1,10 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/smtp"
+	"time"
 
 	"github.com/hbytw/shanlian/controller/internal/model"
 	"github.com/hbytw/shanlian/controller/internal/repository"
@@ -140,8 +143,87 @@ func (s *SettingsService) TestWebhook(ctx context.Context, webhookType, url stri
 		return fmt.Errorf("未知的 Webhook 类型")
 	}
 
-	// TODO: 实现实际的 HTTP 请求发送
-	// 当前返回成功，实际使用时应调用 HTTP 客户端发送测试请求
+	// 构建测试消息内容
+	var jsonBody []byte
+	var err error
+
+	switch webhookType {
+	case "dingtalk":
+		jsonBody, err = buildDingTalkMessage()
+	case "wecom":
+		jsonBody, err = buildWeComMessage()
+	case "feishu":
+		jsonBody, err = buildFeiShuMessage()
+	}
+	if err != nil {
+		return fmt.Errorf("构建测试消息失败：%w", err)
+	}
+
+	// 发送 HTTP POST 请求
+	err = sendWebhookRequest(ctx, url, jsonBody)
+	if err != nil {
+		return fmt.Errorf("发送测试消息失败：%w", err)
+	}
+
+	return nil
+}
+
+// buildDingTalkMessage 构建钉钉测试消息
+func buildDingTalkMessage() ([]byte, error) {
+	msg := map[string]interface{}{
+		"msgtype": "text",
+		"text": map[string]interface{}{
+			"content": "闪连 VPN 管理平台 Webhook 测试消息\n这是一条来自管理平台的测试通知，用于验证 Webhook 配置是否正确。",
+		},
+	}
+	return json.Marshal(msg)
+}
+
+// buildWeComMessage 构建企业微信测试消息
+func buildWeComMessage() ([]byte, error) {
+	msg := map[string]interface{}{
+		"msgtype": "text",
+		"text": map[string]interface{}{
+			"content": "闪连 VPN 管理平台 Webhook 测试消息\n这是一条来自管理平台的测试通知，用于验证 Webhook 配置是否正确。",
+		},
+	}
+	return json.Marshal(msg)
+}
+
+// buildFeiShuMessage 构建飞书测试消息
+func buildFeiShuMessage() ([]byte, error) {
+	msg := map[string]interface{}{
+		"msg_type": "text",
+		"content": map[string]interface{}{
+			"text": "闪连 VPN 管理平台 Webhook 测试消息\n这是一条来自管理平台的测试通知，用于验证 Webhook 配置是否正确。",
+		},
+	}
+	return json.Marshal(msg)
+}
+
+// sendWebhookRequest 发送 Webhook 请求
+func sendWebhookRequest(ctx context.Context, url string, jsonBody []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("创建请求失败：%w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("发送请求失败：%w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("服务器返回错误状态码：%d", resp.StatusCode)
+	}
+
 	return nil
 }
 

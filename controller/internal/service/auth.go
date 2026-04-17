@@ -32,14 +32,16 @@ var (
 // AuthService 认证服务
 type AuthService struct {
 	userRepo           *repository.UserRepository
+	versionRepo        *repository.VersionRepository
 	jwtManager         *jwt.JWTManager
 	auditRepo          *repository.AuditRepository
 	verifyCodeManager  *verifycode.VerifyCodeManager
 }
 
-func NewAuthService(userRepo *repository.UserRepository, jwtManager *jwt.JWTManager, auditRepo *repository.AuditRepository, verifyCodeManager *verifycode.VerifyCodeManager) *AuthService {
+func NewAuthService(userRepo *repository.UserRepository, versionRepo *repository.VersionRepository, jwtManager *jwt.JWTManager, auditRepo *repository.AuditRepository, verifyCodeManager *verifycode.VerifyCodeManager) *AuthService {
 	return &AuthService{
 		userRepo:          userRepo,
+		versionRepo:       versionRepo,
 		jwtManager:        jwtManager,
 		auditRepo:         auditRepo,
 		verifyCodeManager: verifyCodeManager,
@@ -175,8 +177,23 @@ func (s *AuthService) Refresh(ctx context.Context, req *model.RefreshRequest) (*
 }
 
 func (s *AuthService) GetClientVersion(ctx context.Context, platform string) (*model.Version, error) {
-	// TODO: 实现版本查询
-	return nil, nil
+	if platform == "" {
+		platform = "windows" // 默认平台
+	}
+
+	version, err := s.versionRepo.GetLatest(ctx, platform)
+	if err != nil {
+		return nil, fmt.Errorf("查询客户端版本失败：%w", err)
+	}
+	if version == nil {
+		// 返回默认版本信息
+		return &model.Version{
+			Version:     "1.0.0",
+			MinSupported: "1.0.0",
+			Platform:   platform,
+		}, nil
+	}
+	return version, nil
 }
 
 // LoginByPhone 手机号登录
