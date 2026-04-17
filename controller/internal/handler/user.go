@@ -17,6 +17,29 @@ func NewUserHandler(userService *service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
+// parseOperatorID 从 context 中解析操作者 ID，失败返回 401
+func parseOperatorID(c *gin.Context) (uuid.UUID, bool) {
+	idStr := c.GetString("user_id")
+	if idStr == "" {
+		c.JSON(http.StatusUnauthorized, model.NewErrorResponse(
+			model.ErrAuthTokenInvalid,
+			"缺少用户身份信息",
+			nil,
+		))
+		return uuid.Nil, false
+	}
+	operatorID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, model.NewErrorResponse(
+			model.ErrAuthTokenInvalid,
+			"无效的用户身份",
+			nil,
+		))
+		return uuid.Nil, false
+	}
+	return operatorID, true
+}
+
 // Create 创建用户
 func (h *UserHandler) Create(c *gin.Context) {
 	var req model.UserCreateRequest
@@ -29,7 +52,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 		return
 	}
 
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	operatorID, ok := parseOperatorID(c)
+	if !ok {
+		return
+	}
 	user, err := h.userService.Create(c.Request.Context(), &req, operatorID)
 	if err != nil {
 		switch err {
@@ -119,7 +145,10 @@ func (h *UserHandler) List(c *gin.Context) {
 
 	// 获取当前用户角色
 	operatorRole := c.GetString("role")
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	operatorID, ok := parseOperatorID(c)
+	if !ok {
+		return
+	}
 
 	resp, err := h.userService.List(c.Request.Context(), &params, operatorID, operatorRole)
 	if err != nil {
@@ -165,7 +194,10 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	operatorID, ok := parseOperatorID(c)
+	if !ok {
+		return
+	}
 	if err := h.userService.Update(c.Request.Context(), id, &req, operatorID); err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
@@ -193,7 +225,10 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	operatorID, ok := parseOperatorID(c)
+	if !ok {
+		return
+	}
 	if err := h.userService.Delete(c.Request.Context(), id, operatorID); err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
@@ -231,7 +266,10 @@ func (h *UserHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	operatorID, ok := parseOperatorID(c)
+	if !ok {
+		return
+	}
 	if err := h.userService.ResetPassword(c.Request.Context(), id, &req, operatorID); err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,

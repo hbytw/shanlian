@@ -84,9 +84,13 @@ func (s *UserService) List(ctx context.Context, params *model.PageParams, operat
 	// network_admin 只能看到 user 角色的普通用户
 	// user 只能看到自己
 	// super_admin 可以看所有
+	if operatorRole == "" {
+		// 角色为空不应该发生在正常的已认证请求中
+		return nil, errors.New("缺少用户角色信息")
+	}
 	if operatorRole == "network_admin" {
-		// network_admin 只能看普通用户和自己的信息
-		params.Role = "user" // 添加角色过滤
+		// network_admin 只能看普通用户
+		params.Role = "user"
 	}
 	if operatorRole == "user" {
 		// user 只能看自己

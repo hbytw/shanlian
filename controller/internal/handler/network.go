@@ -60,7 +60,7 @@ func (h *NetworkHandler) Allocate(c *gin.Context) {
 		return
 	}
 
-	operatorID, _ := uuid.Parse(c.GetString("user_id"))
+	_, _ = uuid.Parse(c.GetString("user_id")) // TODO: 审计日志需要 operatorID
 	network, err := h.networkService.AllocateCIDR(c.Request.Context(), req.Name, req.Size)
 	if err != nil {
 		status := http.StatusInternalServerError

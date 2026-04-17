@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +15,34 @@ import (
 	"github.com/hbytw/shanlian/controller/pkg/jwt"
 )
 
+// 获取允许的 WebSocket 来源列表，从环境变量 ALLOWED_ORIGINS 读取
+func getAllowedOrigins() []string {
+	originsEnv := os.Getenv("ALLOWED_ORIGINS")
+	if originsEnv == "" {
+		return []string{} // 空表示不允许任何来源（除非是同源请求）
+	}
+	return strings.Split(originsEnv, ",")
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有来源，生产环境应限制
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // 同源请求（无 Origin header）
+		}
+		allowed := getAllowedOrigins()
+		if len(allowed) == 0 {
+			return true // 未配置时允许所有（兼容开发环境）
+		}
+		for _, o := range allowed {
+			if strings.TrimSpace(o) == origin {
+				return true
+			}
+		}
+		log.Printf("WebSocket 拒绝来自未授权来源: %s", origin)
+		return false
 	},
 }
 
@@ -159,12 +184,18 @@ func (h *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 	userID := claims.UserID
 	clientID := uuid.New().String()
 
+	// 根据用户角色分配 groups
+	groups := []string{"events"} // 所有已认证用户都获得 events 组
+	if claims.Role == "super_admin" || claims.Role == "network_admin" {
+		groups = append(groups, "admin")
+	}
+
 	// 注册客户端
 	client := &ClientConnection{
 		ID:       clientID,
 		UserID:   userID,
 		Conn:     conn,
-		Groups:   []string{"admin", "events"},
+		Groups:   groups,
 		JoinTime: time.Now(),
 	}
 	h.hub.Register(client)

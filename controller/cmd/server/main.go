@@ -69,7 +69,7 @@ func main() {
 	peerRepo := repository.NewPeerRepository(db)
 	policyRepo := repository.NewPolicyRepository(db)
 	auditRepo := repository.NewAuditRepository(db)
-	versionRepo := repository.NewVersionRepository(db)
+	versionRepo := repository.NewVersionRepository(db.DB)
 
 	// ============================================================
 	// 初始化服务层
