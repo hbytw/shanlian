@@ -20,6 +20,13 @@ const (
 	HeaderSignature = "X-Signature"
 )
 
+var moonRepo *repository.MoonRepository
+
+// SetMoonRepository 设置 Moon repository 供中间件使用
+func SetMoonRepository(repo *repository.MoonRepository) {
+	moonRepo = repo
+}
+
 // AuthHMAC HMAC 认证中间件（用于 Moon/Planet 客户端）
 func AuthHMAC(jwtManager *jwt.JWTManager, nonceManager *nonce.NonceManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -75,7 +82,6 @@ func AuthHMAC(jwtManager *jwt.JWTManager, nonceManager *nonce.NonceManager) gin.
 		}
 
 		// 通过 apiKey 查询 Moon 节点
-		moonRepo := repository.NewMoonRepository(nil) // 需要从上下文获取 db
 		moon, err := moonRepo.GetByAPIKey(c.Request.Context(), apiKey)
 		if err != nil || moon == nil {
 			c.JSON(http.StatusUnauthorized, model.NewErrorResponse(

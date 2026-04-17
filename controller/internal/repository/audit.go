@@ -614,3 +614,66 @@ func (r *AuditRepository) CountPolicyChangeLogs(ctx context.Context) (int64, err
 func (r *AuditRepository) CreateAdminLogID() uuid.UUID {
 	return uuid.New()
 }
+
+// RecordTrafficAggregation 记录流量聚合结果
+func (r *AuditRepository) RecordTrafficAggregation(ctx context.Context, agg *model.TrafficAggregation) error {
+	query := `
+		INSERT INTO traffic_aggregation (id, network_id, period, period_key, bytes_in, bytes_out, record_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (network_id, period, period_key) DO UPDATE SET bytes_in = $5, bytes_out = $6, record_at = $7
+	`
+	_, err := r.db.ExecContext(ctx, query, uuid.New(), agg.NetworkID, agg.Period, agg.PeriodKey, agg.BytesIn, agg.BytesOut, agg.RecordAt)
+	if err != nil {
+		return fmt.Errorf("记录流量聚合失败：%w", err)
+	}
+	return nil
+}
+
+// CheckTrafficQuotaAndAlert 检查流量配额并写入告警
+func (r *AuditRepository) CheckTrafficQuotaAndAlert(ctx context.Context, networkID uuid.UUID, monthlyBytes int64) error {
+	// 查找网络的流量配额（从 network 表或单独的配置表）
+	// 这里简化处理，使用默认配额：每月 100GB
+	const defaultMonthlyQuotaBytes = 100 * 1024 * 1024 * 1024 // 100GB
+
+	alertThreshold := 0.8 // 80% 阈值
+
+	if monthlyBytes > int64(float64(defaultMonthlyQuotaBytes)*alertThreshold) {
+		// 写入告警日志
+		detail, _ := json.Marshal(map[string]interface{}{
+			"network_id":   networkID,
+			"monthly_bytes": monthlyBytes,
+			"quota_bytes":  defaultMonthlyQuotaBytes,
+			"usage_percent": float64(monthlyBytes) / float64(defaultMonthlyQuotaBytes) * 100,
+		})
+		alertLog := &model.AdminLog{
+			ID:           uuid.New(),
+			Action:       "流量配额告警",
+			ResourceType: "network",
+			ResourceID:   &networkID,
+			Detail:       detail,
+		}
+		if err := r.LogAdmin(ctx, alertLog); err != nil {
+			return fmt.Errorf("写入流量告警失败：%w", err)
+		}
+	}
+	return nil
+}
+
+// GetMonthlyTraffic 获取月度流量
+func (r *AuditRepository) GetMonthlyTraffic(ctx context.Context, networkID uuid.UUID) (int64, error) {
+	// 获取本月初时间
+	now := time.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	query := `
+		SELECT COALESCE(SUM(bytes_in + bytes_out), 0)
+		FROM traffic_logs
+		WHERE network_id = $1 AND logged_at >= $2
+	`
+	var totalBytes int64
+	err := r.db.QueryRowContext(ctx, query, networkID, monthStart).Scan(&totalBytes)
+	if err != nil {
+		return 0, fmt.Errorf("获取月度流量失败：%w", err)
+	}
+	return totalBytes, nil
+}

@@ -221,6 +221,7 @@ func main() {
 				moons.GET("/:id", moonHandler.Get)
 				moons.PUT("/:id", moonHandler.Update)
 				moons.DELETE("/:id", moonHandler.Delete)
+				moons.GET("/:id/stats", statsHandler.MoonStats)
 			}
 
 			// 设备管理
@@ -305,12 +306,12 @@ func main() {
 		// ============================================================
 		// Moon / Planet 客户端接口（API Key + HMAC 认证）
 		// ============================================================
+		middleware.SetMoonRepository(moonRepo)
 		moonAPI := api.Group("")
 		moonAPI.Use(middleware.AuthHMAC(jwtManager, nonceManager))
 		{
-			moonAPI.POST("/moon/register", moonHandler.Register)
+			// 注意：/moon/register 和 /peer/register 是公开的，不需要认证
 			moonAPI.POST("/moon/heartbeat", moonHandler.Heartbeat)
-			moonAPI.POST("/peer/register", peerHandler.Register)
 			moonAPI.POST("/peer/heartbeat", peerHandler.Heartbeat)
 			moonAPI.POST("/peer/discover", peerHandler.Discover)
 			moonAPI.POST("/stats/traffic", func(c *gin.Context) {
@@ -325,6 +326,15 @@ func main() {
 				}
 				c.JSON(http.StatusOK, gin.H{"message": "流量接收成功"})
 			})
+		}
+
+		// ============================================================
+		// 公开接口（无需认证）
+		// ============================================================
+		moonPublic := api.Group("")
+		{
+			moonPublic.POST("/moon/register", moonHandler.Register)
+			moonPublic.POST("/peer/register", peerHandler.Register)
 		}
 
 		// ============================================================

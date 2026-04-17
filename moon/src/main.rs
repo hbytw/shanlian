@@ -64,6 +64,7 @@ struct MoonHeartbeatResponse {
 /// 通用 API 响应
 #[derive(Debug, Deserialize, Default)]
 struct ApiResponse<T> {
+    #[serde(default)]
     success: bool,
     #[serde(default)]
     message: Option<String>,
@@ -185,18 +186,27 @@ impl MoonNode {
     }
 
     async fn run(&self) -> anyhow::Result<()> {
-        // 注册到 Controller (除非 skip_register)
-        let (api_key, api_secret) = if !self.config.skip_register {
-            match self.register().await {
-                Ok(creds) => (Some(creds.0), Some(creds.1)),
-                Err(e) => {
-                    tracing::error!("Moon 注册失败: {}", e);
-                    return Err(e);
+        // 优先使用命令行提供的凭证，否则尝试从文件加载
+        let (api_key, api_secret) = if self.config.api_key.is_some() && self.config.api_secret.is_some() {
+            tracing::info!("使用命令行提供的凭证");
+            (self.config.api_key.clone(), self.config.api_secret.clone())
+        } else if let Some((key, secret)) = Self::load_credentials() {
+            tracing::info!("从文件加载已保存的凭证");
+            (Some(key), Some(secret))
+        } else {
+            // 需要注册
+            if self.config.skip_register {
+                tracing::warn!("跳过注册步骤（仅用于开发测试）");
+                (None, None)
+            } else {
+                match self.register().await {
+                    Ok(creds) => (Some(creds.0), Some(creds.1)),
+                    Err(e) => {
+                        tracing::error!("Moon 注册失败: {}", e);
+                        return Err(e);
+                    }
                 }
             }
-        } else {
-            tracing::warn!("跳过注册步骤（仅用于开发测试）");
-            (None, None)
         };
 
         // 更新配置中的凭证（用于心跳）
@@ -289,9 +299,10 @@ impl MoonNode {
 
         let api_resp: ApiResponse<MoonRegisterResponse> = resp.json().await?;
 
-        if !api_resp.success {
-            tracing::error!("注册失败: {:?}", api_resp.error);
-            anyhow::bail!("注册失败: {:?}", api_resp.error);
+        if api_resp.data.is_none() {
+            let err_msg = api_resp.error.as_ref().or(api_resp.message.as_ref()).map(|s| s.as_str()).unwrap_or("未知错误");
+            tracing::error!("注册失败: {}", err_msg);
+            anyhow::bail!("注册失败: {}", err_msg);
         }
 
         let data = api_resp.data.ok_or_else(|| anyhow::anyhow!("注册响应数据为空"))?;
@@ -445,7 +456,7 @@ impl MoonNode {
         let url = format!("{}/api/v1/moon/heartbeat", config.controller_url);
 
         let body = serde_json::to_vec(&req)?;
-        let body_hash = sha256_hex(&body);
+        let body_str = String::from_utf8_lossy(&body).to_string();
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -455,13 +466,14 @@ impl MoonNode {
         let nonce = generate_nonce();
 
         let auth = HmacAuth::new(api_key.clone(), api_secret);
-        let signature = auth.sign("POST", "/api/v1/moon/heartbeat", timestamp, &nonce, &body_hash);
-
-        let auth_header = format!("Moon {} {} {} {}", api_key, timestamp, nonce, signature);
+        let signature = auth.sign("POST", "/api/v1/moon/heartbeat", timestamp, &nonce, &body_str);
 
         let resp = client
             .post(&url)
-            .header("Authorization", auth_header)
+            .header("X-Api-Key", &api_key)
+            .header("X-Nonce", &nonce)
+            .header("X-Timestamp", &timestamp.to_string())
+            .header("X-Signature", &signature)
             .header("Content-Type", "application/json")
             .body(body)
             .send()

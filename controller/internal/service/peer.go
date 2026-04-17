@@ -115,20 +115,37 @@ func (s *PeerService) ResetIP(ctx context.Context, id uuid.UUID, operatorID uuid
 }
 
 // Register 节点注册
-func (s *PeerService) Register(ctx context.Context, req *model.PeerRegisterRequest) (*model.Peer, error) {
+func (s *PeerService) Register(ctx context.Context, req *model.PeerRegisterRequest) (*model.PeerRegisterResponse, error) {
+	deviceID, err := uuid.Parse(req.DeviceID)
+	if err != nil {
+		return nil, err
+	}
 	networkID, err := uuid.Parse(req.NetworkID)
 	if err != nil {
 		return nil, err
 	}
 
+	// 验证设备是否绑定到该网络
+	device, err := s.deviceRepo.GetByID(ctx, deviceID)
+	if err != nil || device == nil {
+		return nil, errors.New("设备不存在")
+	}
+
+	// 分配 IP（从 IP 池分配，而非使用请求中的 IP）
+	assignedIP, err := s.networkRepo.AllocatePeerIP(ctx, networkID, deviceID)
+	if err != nil {
+		return nil, errors.New("分配 IP 失败：" + err.Error())
+	}
+
 	peer := &model.Peer{
 		ID:          uuid.New(),
+		DeviceID:   deviceID,
 		NetworkID:   networkID,
 		PublicIP:    &req.PublicIP,
 		PublicPort:  &req.PublicPort,
 		NATType:     req.NATType,
 		Online:      true,
-		AssignedIP:  req.AssignedIP,
+		AssignedIP:  assignedIP,
 		Hostname:    &req.Hostname,
 		TunnelType:  req.TunnelType,
 		CreatedAt:   time.Now(),
@@ -140,16 +157,96 @@ func (s *PeerService) Register(ctx context.Context, req *model.PeerRegisterReque
 		return nil, err
 	}
 
-	return peer, nil
+	// 获取网络信息
+	network, err := s.networkRepo.GetByID(ctx, networkID)
+	if err != nil {
+		return nil, errors.New("获取网络信息失败")
+	}
+
+	networkInfo := &model.NetworkInfo{
+		ID:        network.ID.String(),
+		Name:      network.Name,
+		CIDR:      network.CIDR,
+		GatewayIP: network.GatewayIP,
+	}
+
+	// TODO: 获取策略列表（需要 PolicyRepository）
+	policyList := []model.PolicyInfo{}
+
+	// 获取 Moon 列表
+	moons, _, err := s.moonRepo.List(ctx, &model.PageParams{Limit: 100})
+	if err != nil {
+		moons = []model.MoonNode{}
+	}
+	var moonList []model.MoonInfo
+	for _, m := range moons {
+		if m.Online {
+			moonList = append(moonList, model.MoonInfo{
+				ID:        m.ID.String(),
+				Domain:    m.Domain,
+				PublicIP:  m.PublicIP,
+				RelayPort: m.RelayPort,
+				WSSPort:   m.WSSPort,
+				Weight:    m.Weight,
+				Online:    m.Online,
+			})
+		}
+	}
+
+	return &model.PeerRegisterResponse{
+		PeerID:      peer.ID.String(),
+		AssignedIP:  assignedIP,
+		NetworkInfo: networkInfo,
+		PolicyList:  policyList,
+		MoonList:    moonList,
+	}, nil
 }
 
 // Heartbeat 节点心跳
-func (s *PeerService) Heartbeat(ctx context.Context, peerID string) error {
-	id, err := uuid.Parse(peerID)
+func (s *PeerService) Heartbeat(ctx context.Context, req *model.PeerHeartbeatRequest) (*model.PeerHeartbeatResponse, error) {
+	id, err := uuid.Parse(req.PeerID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return s.peerRepo.SetOnline(ctx, id)
+
+	peer, err := s.peerRepo.GetByID(ctx, id)
+	if err != nil || peer == nil {
+		return nil, ErrPeerNotFound
+	}
+
+	// 更新在线状态
+	if err := s.peerRepo.SetOnline(ctx, id); err != nil {
+		return nil, err
+	}
+
+	// 获取更新后的 Moon 列表
+	moons, _, err := s.moonRepo.List(ctx, &model.PageParams{Limit: 100})
+	if err != nil {
+		moons = []model.MoonNode{}
+	}
+	var moonList []model.MoonInfo
+	for _, m := range moons {
+		if m.Online {
+			moonList = append(moonList, model.MoonInfo{
+				ID:        m.ID.String(),
+				Domain:    m.Domain,
+				PublicIP:  m.PublicIP,
+				RelayPort: m.RelayPort,
+				WSSPort:   m.WSSPort,
+				Weight:    m.Weight,
+				Online:    m.Online,
+			})
+		}
+	}
+
+	// TODO: 获取策略更新
+	policyUpdates := []model.PolicyInfo{}
+
+	return &model.PeerHeartbeatResponse{
+		Status:        "ok",
+		MoonList:     moonList,
+		PolicyUpdates: policyUpdates,
+	}, nil
 }
 
 // Discover 发现节点

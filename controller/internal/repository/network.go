@@ -256,26 +256,106 @@ func (r *NetworkRepository) AllocatePeerIP(ctx context.Context, networkID, peerI
 		allocatedIPs[ip] = true
 	}
 
-	// 从网关 IP 开始查找可用 IP
-	// 简单实现：网关 IP + 1 开始尝试分配
-	baseIP := network.GatewayIP
-	var ip3, ip4 int
-	_, _ = fmt.Sscanf(baseIP, "%d.%d.%d.%d", &ip3, &ip4, &ip3, &ip4)
-
-	// 解析网关 IP 的第三和第四个八位组
+	// 解析网关 IP 的八位组
 	var a, b, c, d int
-	_, _ = fmt.Sscanf(baseIP, "%d.%d.%d.%d", &a, &b, &c, &d)
+	_, _ = fmt.Sscanf(network.GatewayIP, "%d.%d.%d.%d", &a, &b, &c, &d)
 	_ = a
 	_ = b
 
-	// 从 .4 开始分配（保留 .1-.3 给网关等）
-	start := 4
-	for i := start; i <= 254; i++ {
+	// 从 .4 开始分配（保留 .1-.3 给网关等特殊用途）
+	for i := 4; i <= 254; i++ {
 		candidateIP := fmt.Sprintf("%d.%d.%d.%d", a, b, c, i)
 		if !allocatedIPs[candidateIP] {
+			// 记录分配历史
+			r.RecordIPAllocation(ctx, networkID, candidateIP, "allocate", &peerID, nil, nil)
 			return candidateIP, nil
 		}
 	}
 
 	return "", fmt.Errorf("无可用 IP 地址")
+}
+
+// ReleasePeerIP 释放节点 IP 回池
+func (r *NetworkRepository) ReleasePeerIP(ctx context.Context, peerID uuid.UUID) error {
+	// 先获取当前 IP
+	var networkID uuid.UUID
+	var assignedIP string
+	query := `SELECT network_id, assigned_ip FROM peers WHERE id = $1`
+	err := r.db.QueryRowContext(ctx, query, peerID).Scan(&networkID, &assignedIP)
+	if err != nil {
+		return fmt.Errorf("查询节点信息失败：%w", err)
+	}
+
+	// 更新节点 IP 为 NULL
+	updateQuery := `UPDATE peers SET assigned_ip = NULL, online = FALSE, updated_at = NOW() WHERE id = $1`
+	_, err = r.db.ExecContext(ctx, updateQuery, peerID)
+	if err != nil {
+		return fmt.Errorf("释放节点 IP 失败：%w", err)
+	}
+
+	// 记录释放历史
+	if assignedIP != "" {
+		r.RecordIPAllocation(ctx, networkID, assignedIP, "release", &peerID, nil, nil)
+	}
+
+	return nil
+}
+
+// AllocateIPHistory IP 分配历史记录
+type IPAllocationHistory struct {
+	ID         uuid.UUID  `json:"id"`
+	NetworkID  uuid.UUID  `json:"network_id"`
+	PeerID     *uuid.UUID `json:"peer_id,omitempty"`
+	MoonID     *uuid.UUID `json:"moon_id,omitempty"`
+	IPAddress  string     `json:"ip_address"`
+	Action     string     `json:"action"` // "allocate" or "release"
+	OperatorID *uuid.UUID `json:"operator_id,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// RecordIPAllocation 记录 IP 分配历史
+func (r *NetworkRepository) RecordIPAllocation(ctx context.Context, networkID uuid.UUID, ipAddress, action string, peerID, moonID, operatorID *uuid.UUID) error {
+	query := `
+		INSERT INTO ip_allocation_history (id, network_id, peer_id, moon_id, ip_address, action, operator_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	_, err := r.db.ExecContext(ctx, query, uuid.New(), networkID, peerID, moonID, ipAddress, action, operatorID, time.Now())
+	if err != nil {
+		return fmt.Errorf("记录 IP 分配历史失败：%w", err)
+	}
+	return nil
+}
+
+// GetIPAllocationHistory 获取 IP 分配历史
+func (r *NetworkRepository) GetIPAllocationHistory(ctx context.Context, networkID uuid.UUID, params *model.PageParams) ([]IPAllocationHistory, int64, error) {
+	countQuery := `SELECT COUNT(*) FROM ip_allocation_history WHERE network_id = $1`
+	listQuery := `
+		SELECT id, network_id, peer_id, moon_id, ip_address, action, operator_id, created_at
+		FROM ip_allocation_history WHERE network_id = $1
+	`
+
+	var total int64
+	err := r.db.QueryRowContext(ctx, countQuery, networkID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("统计 IP 分配历史数量失败：%w", err)
+	}
+
+	listQuery += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $2 OFFSET $3")
+	rows, err := r.db.QueryContext(ctx, listQuery, networkID, params.Limit, params.GetOffset())
+	if err != nil {
+		return nil, 0, fmt.Errorf("查询 IP 分配历史失败：%w", err)
+	}
+	defer rows.Close()
+
+	var history []IPAllocationHistory
+	for rows.Next() {
+		var h IPAllocationHistory
+		err := rows.Scan(&h.ID, &h.NetworkID, &h.PeerID, &h.MoonID, &h.IPAddress, &h.Action, &h.OperatorID, &h.CreatedAt)
+		if err != nil {
+			return nil, 0, fmt.Errorf("扫描 IP 分配历史行失败：%w", err)
+		}
+		history = append(history, h)
+	}
+
+	return history, total, nil
 }

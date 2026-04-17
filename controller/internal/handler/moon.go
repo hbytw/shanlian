@@ -204,7 +204,7 @@ func (h *MoonHandler) Register(c *gin.Context) {
 		return
 	}
 
-	moon, err := h.moonService.Register(c.Request.Context(), &req)
+	resp, err := h.moonService.Register(c.Request.Context(), &req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
@@ -216,7 +216,7 @@ func (h *MoonHandler) Register(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.SuccessResponse{
 		Message: "注册成功",
-		Data:    moon,
+		Data:    resp,
 	})
 }
 
@@ -232,7 +232,8 @@ func (h *MoonHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	if err := h.moonService.Heartbeat(c.Request.Context(), &req); err != nil {
+	resp, err := h.moonService.Heartbeat(c.Request.Context(), &req)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
 			"心跳更新失败："+err.Error(),
@@ -243,5 +244,6 @@ func (h *MoonHandler) Heartbeat(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.SuccessResponse{
 		Message: "心跳成功",
+		Data:    resp,
 	})
 }

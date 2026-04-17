@@ -36,15 +36,29 @@ func (r *MoonRepository) Create(ctx context.Context, req *model.MoonCreateReques
 		return nil, fmt.Errorf("生成 API 密钥失败：%w", err)
 	}
 
+	// 验证端口范围
+	if req.RelayPort < 1 || req.RelayPort > 65535 {
+		req.RelayPort = 11002 // 默认值
+	}
+	if req.WSSPort < 1 || req.WSSPort > 65535 {
+		req.WSSPort = 11443 // 默认值
+	}
+	if req.UDPPort < 1 || req.UDPPort > 65535 {
+		req.UDPPort = 11001 // 默认值
+	}
+	if req.HealthPort < 1 || req.HealthPort > 65535 {
+		req.HealthPort = 11003 // 默认值
+	}
+
 	moon := &model.MoonNode{
 		ID:         uuid.New(),
 		Domain:     req.Domain,
 		PublicIP:   req.PublicIP,
 		GatewayIP:  req.GatewayIP,
-		RelayPort:  11002,
-		WSSPort:    11443,
-		UDPPort:    11001,
-		HealthPort: 11003,
+		RelayPort:  req.RelayPort,
+		WSSPort:    req.WSSPort,
+		UDPPort:    req.UDPPort,
+		HealthPort: req.HealthPort,
 		Weight:     100,
 		APIKey:     apiKey,
 		APISecret:  apiSecret,
@@ -54,18 +68,6 @@ func (r *MoonRepository) Create(ctx context.Context, req *model.MoonCreateReques
 		UpdatedAt:  time.Now(),
 	}
 
-	if req.RelayPort > 0 {
-		moon.RelayPort = req.RelayPort
-	}
-	if req.WSSPort > 0 {
-		moon.WSSPort = req.WSSPort
-	}
-	if req.UDPPort > 0 {
-		moon.UDPPort = req.UDPPort
-	}
-	if req.HealthPort > 0 {
-		moon.HealthPort = req.HealthPort
-	}
 	if req.Weight > 0 {
 		moon.Weight = req.Weight
 	}
@@ -268,4 +270,67 @@ func (r *MoonRepository) AllocateMoonIP(ctx context.Context, networkID, moonID u
 func (r *MoonRepository) ReleaseMoonIP(ctx context.Context, moonID uuid.UUID) error {
 	// 实现 IP 释放逻辑
 	return nil
+}
+
+// RotateAPIKey 轮换 Moon 的 API Key
+func (r *MoonRepository) RotateAPIKey(ctx context.Context, moonID uuid.UUID) (newKey, newSecret string, err error) {
+	newKey, newSecret, err = r.generateAPIKey()
+	if err != nil {
+		return "", "", fmt.Errorf("生成新 API 密钥失败：%w", err)
+	}
+
+	query := `UPDATE moon_nodes SET api_key = $1, api_secret = $2, updated_at = NOW() WHERE id = $3`
+	_, err = r.db.ExecContext(ctx, query, newKey, newSecret, moonID)
+	if err != nil {
+		return "", "", fmt.Errorf("更新 API 密钥失败：%w", err)
+	}
+	return newKey, newSecret, nil
+}
+
+// UpdateConnections 更新 Moon 连接数
+func (r *MoonRepository) UpdateConnections(ctx context.Context, moonID uuid.UUID, connections int) error {
+	query := `UPDATE moon_nodes SET connections = $1, updated_at = NOW() WHERE id = $2`
+	_, err := r.db.ExecContext(ctx, query, connections, moonID)
+	if err != nil {
+		return fmt.Errorf("更新连接数失败：%w", err)
+	}
+	return nil
+}
+
+// GetOnlineMoonCount 获取在线 Moon 数量
+func (r *MoonRepository) GetOnlineMoonCount(ctx context.Context) (int, error) {
+	query := `SELECT COUNT(*) FROM moon_nodes WHERE online = TRUE`
+	var count int
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("查询在线 Moon 数量失败：%w", err)
+	}
+	return count, nil
+}
+
+// GetMoonsLastHeartbeatBefore 获取最后心跳时间早于指定时间的 Moon
+func (r *MoonRepository) GetMoonsLastHeartbeatBefore(ctx context.Context, before time.Time) ([]model.MoonNode, error) {
+	query := `SELECT id, domain, public_ip, gateway_ip, relay_port, wss_port, udp_port, health_port,
+	          weight, api_key, api_secret, online, version, connections, created_at, updated_at, last_heartbeat_at
+	          FROM moon_nodes WHERE last_heartbeat_at < $1 AND online = TRUE`
+	rows, err := r.db.QueryContext(ctx, query, before)
+	if err != nil {
+		return nil, fmt.Errorf("查询超时 Moon 失败：%w", err)
+	}
+	defer rows.Close()
+
+	var moons []model.MoonNode
+	for rows.Next() {
+		var moon model.MoonNode
+		err := rows.Scan(
+			&moon.ID, &moon.Domain, &moon.PublicIP, &moon.GatewayIP, &moon.RelayPort, &moon.WSSPort,
+			&moon.UDPPort, &moon.HealthPort, &moon.Weight, &moon.APIKey, &moon.APISecret,
+			&moon.Online, &moon.Version, &moon.Connections, &moon.CreatedAt, &moon.UpdatedAt, &moon.LastHeartbeatAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描 Moon 节点行失败：%w", err)
+		}
+		moons = append(moons, moon)
+	}
+	return moons, nil
 }

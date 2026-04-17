@@ -186,7 +186,8 @@ func (h *PeerHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	if err := h.peerService.Heartbeat(c.Request.Context(), req.PeerID); err != nil {
+	resp, err := h.peerService.Heartbeat(c.Request.Context(), &req)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
 			"心跳更新失败："+err.Error(),
@@ -197,6 +198,7 @@ func (h *PeerHandler) Heartbeat(c *gin.Context) {
 
 	c.JSON(http.StatusOK, model.SuccessResponse{
 		Message: "心跳成功",
+		Data:    resp,
 	})
 }
 

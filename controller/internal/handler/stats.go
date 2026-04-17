@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/hbytw/shanlian/controller/internal/model"
 	"github.com/hbytw/shanlian/controller/internal/service"
 )
@@ -98,6 +99,34 @@ func (h *StatsHandler) Top(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			model.ErrSystemInternal,
 			"获取 Top N 统计失败："+err.Error(),
+			nil,
+		))
+		return
+	}
+
+	c.JSON(http.StatusOK, model.SuccessResponse{
+		Message: "获取成功",
+		Data:    stats,
+	})
+}
+
+func (h *StatsHandler) MoonStats(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
+			model.ErrSystemValidatationFailed,
+			"无效的 Moon ID",
+			nil,
+		))
+		return
+	}
+
+	stats, err := h.statsService.GetMoonStats(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
+			model.ErrSystemInternal,
+			"获取 Moon 统计失败："+err.Error(),
 			nil,
 		))
 		return

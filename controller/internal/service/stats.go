@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,16 +19,86 @@ type StatsService struct {
 	moonRepo    *repository.MoonRepository
 	networkRepo *repository.NetworkRepository
 	auditRepo   *repository.AuditRepository
+
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 }
 
 func NewStatsService(peerRepo *repository.PeerRepository, deviceRepo *repository.DeviceRepository, moonRepo *repository.MoonRepository, networkRepo *repository.NetworkRepository, auditRepo *repository.AuditRepository) *StatsService {
-	return &StatsService{
+	s := &StatsService{
 		peerRepo:    peerRepo,
 		deviceRepo:  deviceRepo,
 		moonRepo:    moonRepo,
 		networkRepo: networkRepo,
 		auditRepo:   auditRepo,
+		stopChan:    make(chan struct{}),
 	}
+	// 启动定期聚合任务
+	s.wg.Add(1)
+	go s.runAggregationTicker()
+	return s
+}
+
+// Stop 停止统计服务
+func (s *StatsService) Stop() {
+	close(s.stopChan)
+	s.wg.Wait()
+}
+
+// runAggregationTicker 定期聚合 ticker
+func (s *StatsService) runAggregationTicker() {
+	defer s.wg.Done()
+	// 每小时执行一次聚合
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.performHourlyAggregation()
+		}
+	}
+}
+
+// performHourlyAggregation 执行小时聚合
+func (s *StatsService) performHourlyAggregation() {
+	ctx := context.Background()
+	now := time.Now()
+	hourStart := now.Truncate(time.Hour)
+
+	log.Printf("开始执行流量聚合：%s", hourStart.Format("2006-01-02 15:04"))
+
+	// 获取所有网络
+	networks, _, err := s.networkRepo.List(ctx, &model.PageParams{Limit: 1000})
+	if err != nil {
+		log.Printf("流量聚合失败：查询网络列表错误 %v", err)
+		return
+	}
+
+	for _, network := range networks {
+		// 聚合每个网络的流量
+		totalIn, totalOut, err := s.auditRepo.GetTrafficSummary(ctx, &network.ID, nil, hourStart.Add(-1*time.Hour), hourStart)
+		if err != nil {
+			log.Printf("流量聚合失败：网络 %s, error: %v", network.Name, err)
+			continue
+		}
+
+		// 写入聚合结果
+		if err := s.auditRepo.RecordTrafficAggregation(ctx, &model.TrafficAggregation{
+			NetworkID:  &network.ID,
+			Period:     "hourly",
+			PeriodKey:  hourStart.Format("2006010215"),
+			BytesIn:    totalIn,
+			BytesOut:   totalOut,
+			RecordAt:   now,
+		}); err != nil {
+			log.Printf("写入聚合结果失败：网络 %s, error: %v", network.Name, err)
+		}
+	}
+
+	log.Printf("流量聚合完成：处理了 %d 个网络", len(networks))
 }
 
 // TrafficQueryParams 流量查询参数
@@ -209,6 +280,26 @@ func (s *StatsService) Top(ctx context.Context) (*model.StatsTopResponse, error)
 	return &model.StatsTopResponse{
 		TopPeers:    topPeers,
 		TopNetworks: topNetworks,
+	}, nil
+}
+
+// GetMoonStats 获取 Moon 节点统计
+func (s *StatsService) GetMoonStats(ctx context.Context, moonID uuid.UUID) (*model.MoonStatsResponse, error) {
+	// 获取 Moon 信息
+	moon, err := s.moonRepo.GetByID(ctx, moonID)
+	if err != nil {
+		return nil, err
+	}
+	if moon == nil {
+		return nil, ErrMoonNotFound
+	}
+
+	return &model.MoonStatsResponse{
+		Moon:        moon,
+		Connections: moon.Connections,
+		TrafficIn:   0,
+		TrafficOut:  0,
+		Peers:       nil,
 	}, nil
 }
 

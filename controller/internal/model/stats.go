@@ -53,6 +53,15 @@ type MoonStat struct {
 	TrafficOut  int64     `json:"traffic_out"`
 }
 
+// MoonStatsResponse Moon 节点详情统计响应
+type MoonStatsResponse struct {
+	Moon        *MoonNode `json:"moon"`
+	Connections int       `json:"connections"`
+	TrafficIn   int64     `json:"traffic_in"`
+	TrafficOut  int64     `json:"traffic_out"`
+	Peers       []PeerStat `json:"peers,omitempty"`
+}
+
 // StatsOverviewResponse 概览统计响应
 type StatsOverviewResponse struct {
 	TotalUsers      int64   `json:"total_users"`
@@ -126,4 +135,23 @@ type ReceiveTrafficRequest struct {
 	Duration   int    `json:"duration"`
 	Protocol   string `json:"protocol"`
 	TunnelType string `json:"tunnel_type"`
+}
+
+// TrafficAggregation 流量聚合记录
+type TrafficAggregation struct {
+	ID        uuid.UUID  `json:"id"`
+	NetworkID *uuid.UUID `json:"network_id,omitempty"`
+	Period    string     `json:"period"`    // "hourly", "daily", "monthly"
+	PeriodKey string     `json:"period_key"` // "2006010215", "20060102", "200601"
+	BytesIn   int64     `json:"bytes_in"`
+	BytesOut  int64     `json:"bytes_out"`
+	RecordAt  time.Time `json:"record_at"`
+}
+
+// TrafficQuota 流量配额
+type TrafficQuota struct {
+	ID         uuid.UUID `json:"id"`
+	NetworkID  uuid.UUID `json:"network_id"`
+	MonthlyGB  int64     `json:"monthly_gb"`   // 月流量限额（GB）
+	AlertThreshold float64 `json:"alert_threshold"` // 告警阈值（百分比）
 }
