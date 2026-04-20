@@ -31,6 +31,10 @@ sha2 = "0.10"
 hmac = "0.12"
 rand = "0.8"
 hex = "0.4"
+crc32fast = "1.3"
+
+# System
+hostname = "0.4"
 
 # TLS
 rustls = "0.22"
