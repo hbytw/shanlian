@@ -3,6 +3,10 @@
 docs/
 .claude/
 
+# 项目计划文档（需要追踪）
+!PLAN-*.md
+!PROGRESS-*.md
+
 # 操作系统
 .DS_Store
 Thumbs.db
