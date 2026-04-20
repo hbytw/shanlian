@@ -84,6 +84,12 @@ pin-project = "1.1"
 # Routing
 ipnetwork = "0.20"
 
+# URL parsing
+url = "2.5"
+
+# Regex
+regex = "1.10"
+
 [dev-dependencies]
 tempfile = "3.10"
 tokio-test = "0.4"

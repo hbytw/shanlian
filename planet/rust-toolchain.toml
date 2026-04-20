@@ -1,0 +1,17 @@
+[tool.clippy]
+all = true
+warn = true
+循环警告 = "allow"
+pedantic = true
+
+[tool.clippy.matches]
+incorrect_clone_impl_on_copy_type = "warn"
+mut_mut = "warn"
+non_exhaustive_literals = "warn"
+precedences = "warn"
+unnecessary_unwrap = "warn"
+
+[tool.rustfmt]
+edition = "2021"
+max_width = 100
+newline_style = "Unix"

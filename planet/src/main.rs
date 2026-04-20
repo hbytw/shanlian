@@ -10,15 +10,19 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod audit;
+mod bond;
 mod cli;
 mod config;
 mod console;
 mod controller;
 mod crypto;
-mod tunnel;
 mod nat;
+mod policy;
 mod routing;
 mod session;
+mod tunnel;
+mod tun;
 
 pub use config::Config;
 
