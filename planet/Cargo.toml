@@ -1,0 +1,103 @@
+[package]
+name = "shanlian-planet"
+version = "0.1.0"
+edition = "2021"
+authors = ["ShanLian Team"]
+description = "闪连 VPN Planet 客户端"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# WebSocket
+tokio-tungstenite = "0.21"
+url = "2.5"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Cryptography
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+ed25519-dalek = { version = "2.0", features = ["rand_core"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
+hex = "0.4"
+
+# TLS
+rustls = "0.22"
+webpki-roots = "0.26"
+
+# Networking
+socket2 = "0.5"
+if-addrs = "0.14"
+dns-lookup = "2.0"
+
+# TUN device
+cfg-if = "1.0"
+
+# System interfaces
+libc = "0.2"
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winioctl", "cfg", "handleapi", "iphlpapi", "minwindef", "netioapi", "ntdef", "winuser"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+console = "0.15"
+dialoguer = "0.11"
+indicatif = "0.17"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+backtrace = "0.3"
+
+# Time
+chrono = "0.4"
+time = "0.3"
+
+# UUID
+uuid = { version = "1.7", features = ["v4", "serde"] }
+
+# Environment
+dirs = "5.0"
+home = "0.5"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+pin-project = "1.1"
+
+# Routing
+ipnetwork = "0.20"
+
+[dev-dependencies]
+tempfile = "3.10"
+tokio-test = "0.4"
+mockall = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Cross-compilation setup for Windows (requires x86_64-w64-mingw32-gcc)
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+
+[target.i686-pc-windows-gnu]
+linker = "i686-w64-mingw32-gcc"
