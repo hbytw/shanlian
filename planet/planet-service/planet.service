@@ -1,0 +1,30 @@
+[Unit]
+Description=ShanLian VPN Client
+Documentation=https://github.com/shanlian/vpn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/shanlian-planet connect
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+Environment="RUST_LOG=info"
+
+# Run as specific user (uncomment and modify)
+# User=%u
+# Group=%u
+
+# Allow binding to privileged ports
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/run/planet /var/log/planet
+
+[Install]
+WantedBy=multi-user.target

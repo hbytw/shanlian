@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>闪连 VPN</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 标题栏 -->
+        <header class="header">
+            <h1>🌐 闪连 VPN</h1>
+            <span id="version" class="version">v0.1.0</span>
+        </header>
+
+        <!-- 连接状态 -->
+        <section class="status-section">
+            <div id="status-indicator" class="status-indicator disconnected">
+                <div class="status-dot"></div>
+                <span id="status-text">未连接</span>
+            </div>
+            <div id="server-info" class="server-info">
+                <span id="server-text">--</span>
+            </div>
+        </section>
+
+        <!-- 连接按钮 -->
+        <section class="action-section">
+            <button id="connect-btn" class="btn btn-primary">
+                <span id="btn-text">连接</span>
+            </button>
+        </section>
+
+        <!-- 设置区域 -->
+        <section class="settings-section">
+            <h2>设置</h2>
+
+            <div class="form-group">
+                <label for="server-input">服务器地址</label>
+                <input type="text" id="server-input" placeholder="https://controller.ytw.fr:8443">
+            </div>
+
+            <div class="form-group">
+                <label for="device-id">设备 ID</label>
+                <input type="text" id="device-id" placeholder="自动生成" readonly>
+            </div>
+
+            <div class="form-group">
+                <label for="heartbeat-interval">心跳间隔 (秒)</label>
+                <input type="number" id="heartbeat-interval" value="30" min="10" max="300">
+            </div>
+
+            <div class="form-group toggle-group">
+                <label for="autostart-toggle">开机自启</label>
+                <label class="toggle">
+                    <input type="checkbox" id="autostart-toggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label for="log-level">日志级别</label>
+                <select id="log-level">
+                    <option value="debug">Debug</option>
+                    <option value="info" selected>Info</option>
+                    <option value="warn">Warn</option>
+                    <option value="error">Error</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- 底部按钮 -->
+        <section class="footer-section">
+            <button id="save-btn" class="btn btn-secondary">保存设置</button>
+            <button id="minimize-btn" class="btn btn-text">最小化到托盘</button>
+        </section>
+    </div>
+
+    <!-- 调试日志 -->
+    <div id="debug-log" style="display:none; position:fixed; bottom:60px; left:0; right:0; background:#333; color:#fff; padding:10px; font-size:12px; max-height:150px; overflow:auto; z-index:9999;">
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
