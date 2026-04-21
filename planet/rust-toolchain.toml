@@ -1,7 +1,7 @@
 [tool.clippy]
 all = true
 warn = true
-循环警告 = "allow"
+cyclic_configs = "allow"
 pedantic = true
 
 [tool.clippy.matches]
