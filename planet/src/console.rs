@@ -2,21 +2,26 @@
 //!
 //! 提供交互式 CLI shell 支持
 
-use crate::{bond::BondManager, config::Config, controller::ControllerClient, nat::NatHandler, policy::PolicyEngine, session::SessionManager, tunnel::TunnelManager};
-use anyhow::Result;
+use crate::{bond::BondManager, config::Config, controller::ControllerClient, nat::NatHandler, policy::PolicyEngine, session::SessionManager, tunnel::TunnelManager, vpn::{VpnConfig, VpnEngine, VpnEngineHandle}, tun::TunDevice};
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::time::Instant;
 
 /// 全局状态
 pub struct ConsoleState {
     pub connected: bool,
     pub peer_id: Option<String>,
+    pub assigned_ip: Option<String>,
     pub controller_client: Option<Arc<RwLock<ControllerClient>>>,
     pub tunnel_manager: Arc<RwLock<TunnelManager>>,
     pub session_manager: Arc<RwLock<SessionManager>>,
     pub bond_manager: Arc<RwLock<BondManager>>,
     pub policy_engine: Arc<RwLock<PolicyEngine>>,
     pub nat_handler: Arc<RwLock<NatHandler>>,
+    pub vpn_engine: Option<Arc<VpnEngine>>,
+    pub vpn_handle: Option<VpnEngineHandle>,
+    pub connected_at: Option<Instant>,
 }
 
 impl Default for ConsoleState {
@@ -24,12 +29,16 @@ impl Default for ConsoleState {
         Self {
             connected: false,
             peer_id: None,
+            assigned_ip: None,
             controller_client: None,
             tunnel_manager: Arc::new(RwLock::new(TunnelManager::new())),
             session_manager: Arc::new(RwLock::new(SessionManager::new())),
             bond_manager: Arc::new(RwLock::new(BondManager::new())),
             policy_engine: Arc::new(RwLock::new(PolicyEngine::new())),
             nat_handler: Arc::new(RwLock::new(NatHandler::new())),
+            vpn_engine: None,
+            vpn_handle: None,
+            connected_at: None,
         }
     }
 }
@@ -146,14 +155,167 @@ fn print_help() {
 async fn do_connect(state: Arc<RwLock<ConsoleState>>) {
     println!("正在连接到 Controller...");
 
-    let mut s = state.write().await;
-    if s.connected {
-        println!("已经连接!");
+    // 获取配置
+    let config = match Config::load(None) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("加载配置失败: {}", e);
+            return;
+        }
+    };
+
+    // 创建设备 ID
+    let device_id = config.device_id.clone()
+        .unwrap_or_else(|| {
+            let id = uuid::Uuid::new_v4().to_string();
+            println!("生成新设备 ID: {}", id);
+            id
+        });
+
+    // 创建 Controller 客户端并注册
+    let mut controller = match ControllerClient::new(&config.controller, &device_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            println!("创建 Controller 客户端失败: {}", e);
+            return;
+        }
+    };
+
+    let register_resp = match controller.register().await {
+        Ok(r) => r,
+        Err(e) => {
+            println!("设备注册失败: {}", e);
+            return;
+        }
+    };
+
+    println!("\n注册成功!");
+    println!("  Peer ID: {}", register_resp.peer_id);
+    println!("  分配 IP: {}", register_resp.assigned_ip);
+    println!("  网络 ID: {}", register_resp.network_id);
+
+    // 显示 Moon 节点信息
+    if let Some(ref moon_list) = register_resp.moon_list {
+        if !moon_list.is_empty() {
+            println!("\n可用 Moon 节点:");
+            for moon in moon_list.iter().take(3) {
+                println!("  - {}:{} (weight: {}, online: {})",
+                    moon.domain, moon.relay_port, moon.weight, moon.online);
+            }
+        }
+    }
+
+    // 创建 TUN 设备
+    println!("\n创建 TUN 设备...");
+    let tun = match TunDevice::new(&config.tun_name, config.tun_mtu).await {
+        Ok(t) => t,
+        Err(e) => {
+            println!("创建 TUN 设备失败: {}", e);
+            return;
+        }
+    };
+
+    // 设置 IP
+    if let Err(e) = tun.set_ip(&register_resp.assigned_ip, "255.255.255.0").await {
+        println!("设置 IP 失败: {}", e);
+        let _ = tun.close().await;
         return;
     }
 
-    // TODO: 实现实际的连接逻辑
-    println!("Controller 连接功能开发中...");
+    // 启动 TUN 设备
+    if let Err(e) = tun.up().await {
+        println!("启动 TUN 设备失败: {}", e);
+        let _ = tun.close().await;
+        return;
+    }
+
+    println!("TUN 设备 {} 已启动", config.tun_name);
+
+    // 创建并连接 Moon 隧道
+    println!("\n连接到 Moon 节点...");
+    let mut tunnel_manager = TunnelManager::new();
+
+    if let Some(ref moon_list) = register_resp.moon_list {
+        let mut connected = false;
+        for moon in moon_list.iter().filter(|m| m.online) {
+            let moon_addr = format!("{}:{}", moon.domain, moon.relay_port);
+            println!("  尝试连接: {}", moon_addr);
+
+            match tunnel_manager.create(crate::tunnel::TunnelType::Moon, &moon_addr).await {
+                Ok(id) => {
+                    match tunnel_manager.connect(&id).await {
+                        Ok(_) => {
+                            if let Err(e) = tunnel_manager.set_active(&id) {
+                                println!("  设置活动隧道失败: {}", e);
+                                continue;
+                            }
+                            println!("  已连接到 {}", moon_addr);
+                            connected = true;
+                            break;
+                        }
+                        Err(e) => {
+                            println!("  连接失败: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  创建隧道失败: {}", e);
+                    continue;
+                }
+            }
+        }
+
+        if !connected {
+            println!("无法连接到任何 Moon 节点");
+            let _ = tun.close().await;
+            return;
+        }
+    } else {
+        println!("无可用 Moon 节点");
+        let _ = tun.close().await;
+        return;
+    }
+
+    // 创建 VPN 引擎
+    let vpn_config = VpnConfig {
+        heartbeat_interval_secs: config.heartbeat_interval,
+        tun_mtu: config.tun_mtu,
+        tun_name: config.tun_name.clone(),
+        packet_buf_size: 65535,
+    };
+
+    let vpn_engine = match VpnEngine::new(tun, tunnel_manager, vpn_config).await {
+        Ok(e) => e,
+        Err(e) => {
+            println!("创建 VPN 引擎失败: {}", e);
+            return;
+        }
+    };
+
+    // 将引擎放入 Arc 并克隆给任务使用
+    let engine_arc = Arc::new(vpn_engine);
+    let engine_for_task = engine_arc.clone();
+
+    // 启动 VPN 引擎任务
+    let handle = tokio::spawn(async move {
+        engine_for_task.run().await
+    });
+
+    // 创建句柄
+    let vpn_handle = VpnEngineHandle::new((*engine_arc).clone(), handle);
+
+    // 更新状态
+    let mut s = state.write().await;
+    s.connected = true;
+    s.peer_id = Some(register_resp.peer_id);
+    s.assigned_ip = Some(register_resp.assigned_ip);
+    s.controller_client = Some(Arc::new(RwLock::new(controller)));
+    s.vpn_engine = Some(engine_arc);
+    s.vpn_handle = Some(vpn_handle);
+    s.connected_at = Some(Instant::now());
+
+    println!("\n=== VPN 连接已建立 ===");
 }
 
 /// 断开连接
@@ -167,9 +329,11 @@ async fn do_disconnect(state: Arc<RwLock<ConsoleState>>) {
     }
 
     // 关闭所有隧道
-    let mut tm = s.tunnel_manager.write().await;
-    if let Err(e) = tm.close_all().await {
-        tracing::error!("关闭隧道失败: {}", e);
+    {
+        let mut tm = s.tunnel_manager.write().await;
+        if let Err(e) = tm.close_all().await {
+            tracing::error!("关闭隧道失败: {}", e);
+        }
     }
 
     s.connected = false;
@@ -395,8 +559,9 @@ async fn do_list_policies(state: Arc<RwLock<ConsoleState>>, args: &[&str]) {
 async fn do_nat_status(state: Arc<RwLock<ConsoleState>>) {
     println!("\n=== NAT 状态 ===");
 
-    let mut nh = state.write().await;
-    match nh.detect().await {
+    let s = state.read().await;
+    let mut nat = s.nat_handler.write().await;
+    match nat.detect().await {
         Ok(info) => {
             println!("NAT 类型: {}", info.nat_type);
             println!("公网地址: {}:{}", info.public_ip, info.public_port);

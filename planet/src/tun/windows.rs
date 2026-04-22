@@ -1,39 +1,102 @@
 //! Windows TUN 设备实现
 //!
 //! 使用 Windows TAP-Windows 驱动创建 TUN 设备
+//! 注意: Windows 上需要 TAP-Windows 驱动
 
 use anyhow::{Context, Result};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::process::Command;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Windows TAP 句柄
+pub struct TapHandle {
+    handle: Arc<Mutex<std::fs::File>>,
+    device_path: String,
+}
 
 /// 打开 TUN 设备 (Windows)
-pub async fn open_tun(name: &str, mtu: u32) -> Result<std::os::fd::RawFd> {
-    // Windows 使用 TAP-Windows 驱动
-    // 设备名格式: \\.\Global\{GUID}.tap
+pub async fn open_tun(name: &str, mtu: u32) -> Result<TapHandle> {
     let device_path = if name.is_empty() || name == "planet0" {
         find_tap_device()?
     } else {
-        // 使用指定的设备名
-        format!("\\\\.\\Global\\{}.tap", name)
+        name.to_string()
     };
 
-    let fd = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&device_path)
-        .with_context(|| format!("打开 TAP 设备 {} 失败", device_path))?
-        .into_raw_fd();
+    tracing::info!("尝试打开 TAP 设备: {}", device_path);
+
+    // Clone for spawn_blocking since move will consume device_path
+    let device_path_for_open = device_path.clone();
+
+    // 使用同步方式打开 TAP 设备
+    let file = tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&device_path_for_open)
+    })
+    .await
+    .context("打开 TAP 设备失败")??
+    .into();
+
+    let handle = TapHandle {
+        handle: Arc::new(Mutex::new(file)),
+        device_path,
+    };
 
     // 设置 MTU
-    set_mtu(&device_path, mtu).await?;
+    set_mtu(&handle.device_path, mtu).await?;
 
-    tracing::info!("打开 TAP 设备 {} 成功 (MTU: {})", device_path, mtu);
-    Ok(fd)
+    tracing::info!("TAP 设备 {} 配置成功 (MTU: {})", handle.device_path, mtu);
+
+    Ok(handle)
+}
+
+/// 读取 TAP 数据包
+pub async fn read_packet(handle: &TapHandle, buf: &mut [u8]) -> Result<usize> {
+    let file = handle.handle.clone();
+
+    // 读取到临时 buffer
+    let (n, temp_buf) = tokio::task::spawn_blocking(move || {
+        let mut guard = file.blocking_lock();
+        use std::io::Read;
+        let mut temp_buf = vec![0u8; 65535];
+        match (&mut *guard).read(&mut temp_buf) {
+            Ok(n) => Ok((n, temp_buf)),
+            Err(e) => Err(anyhow::anyhow!("读取失败: {}", e)),
+        }
+    })
+    .await
+    .context("读取任务失败")??;
+
+    // 复制到输出 buffer
+    let copy_len = std::cmp::min(n, buf.len());
+    buf[..copy_len].copy_from_slice(&temp_buf[..copy_len]);
+    Ok(copy_len)
+}
+
+/// 写入 TAP 数据包
+pub async fn write_packet(handle: &TapHandle, buf: &[u8]) -> Result<usize> {
+    let file = handle.handle.clone();
+    let data = buf.to_vec();
+
+    tokio::task::spawn_blocking(move || {
+        let mut guard = file.blocking_lock();
+        use std::io::Write;
+        (&mut *guard).write(&data).map_err(|e| anyhow::anyhow!("写入失败: {}", e))
+    })
+    .await
+    .context("写入任务失败")?
+}
+
+/// 关闭 TAP 设备
+pub async fn close_tap(handle: TapHandle) -> Result<()> {
+    tracing::info!("关闭 TAP 设备 {}", handle.device_path);
+    // Arc 会自动释放
+    Ok(())
 }
 
 /// 查找 TAP 设备 (通过注册表)
 fn find_tap_device() -> Result<String> {
-    // 尝试通过注册表查找 TAP 设备
     let output = Command::new("reg")
         .args([
             "query",
@@ -44,19 +107,16 @@ fn find_tap_device() -> Result<String> {
     match output {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            // 解析注册表输出，查找包含 "Connection" 的项
             for line in stdout.lines() {
                 if line.contains("Connection") {
-                    // 提取 GUID
                     let parts: Vec<&str> = line.trim().split_whitespace().collect();
                     if parts.len() >= 3 {
                         let guid = parts.last().unwrap_or(&"");
                         if !guid.is_empty() && !guid.contains("{") {
-                            // 尝试查询这个连接的名称
                             let name_output = Command::new("reg")
                                 .args([
                                     "query",
-                                    &format!(r"HKLM\SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{}\Connection", guid),
+                                    &format!(r"HKLM\SYSTEM\CurrentControlSet\Control\Network\{{4D36E972-E325-11CE-BFC1-08002BE10318}}\{}\Connection", guid),
                                 ])
                                 .output();
 
@@ -75,14 +135,12 @@ fn find_tap_device() -> Result<String> {
     }
 
     // 如果注册表查询失败，尝试默认的 TAP 适配器
-    // 通过 ipconfig 查找
     let ipconfig_output = Command::new("ipconfig")
         .output()
         .context("执行 ipconfig 失败")?;
 
     let stdout = String::from_utf8_lossy(&ipconfig_output.stdout);
 
-    // 查找 TAP-Windows 适配器
     let mut current_adapter = String::new();
     for line in stdout.lines() {
         let line = line.trim();
@@ -90,7 +148,6 @@ fn find_tap_device() -> Result<String> {
             current_adapter = line.replace("adapter ", "").replace("适配器 ", "").trim().to_string();
         } else if line.contains("TAP-Windows") || line.contains("ShanLian") {
             if !current_adapter.is_empty() {
-                // 找到了 TAP 适配器，提取名称
                 let clean_name = current_adapter.trim_end_matches(':').trim();
                 tracing::info!("找到 TAP 适配器: {}", clean_name);
                 return Ok(format!("\\\\.\\Global\\{}.tap", clean_name));
@@ -98,35 +155,25 @@ fn find_tap_device() -> Result<String> {
         }
     }
 
-    // 如果都找不到，返回一个常见的默认 GUID
     tracing::warn!("未找到 TAP 设备，使用默认 GUID");
     Ok("\\\\.\\Global\\{4F50731A-8992-4A2C-A4C2-A1E8D0D3D7AE}.tap".to_string())
 }
 
 /// 设置 MTU
 async fn set_mtu(device_path: &str, mtu: u32) -> Result<()> {
-    // 从设备路径提取适配器名称
     let adapter_name = device_path
         .trim_start_matches("\\\\.\\Global\\")
         .trim_end_matches(".tap");
 
-    // 提取 GUID 部分
     let guid = if adapter_name.contains("{") {
         adapter_name.to_string()
     } else {
-        // 如果不是 GUID，尝试通过注册表查找对应的 GUID
         find_adapter_guid(adapter_name)?
     };
 
     let output = Command::new("netsh")
         .args([
-            "interface",
-            "ipv4",
-            "set",
-            "subinterface",
-            &guid,
-            "mtu",
-            &mtu.to_string(),
+            "interface", "ipv4", "set", "subinterface", &guid, "mtu", &mtu.to_string(),
         ])
         .output();
 
@@ -148,7 +195,6 @@ async fn set_mtu(device_path: &str, mtu: u32) -> Result<()> {
 
 /// 查找适配器对应的 GUID
 fn find_adapter_guid(adapter_name: &str) -> Result<String> {
-    // 遍历注册表查找对应的 GUID
     let output = Command::new("reg")
         .args([
             "query",
@@ -162,15 +208,13 @@ fn find_adapter_guid(adapter_name: &str) -> Result<String> {
     for line in stdout.lines() {
         let line = line.trim();
         if line.starts_with("HKEY_") || line.starts_with("HKLM\\") {
-            // 提取 GUID
             if let Some(guid) = line.split_whitespace().last() {
                 let guid = guid.trim();
                 if guid.starts_with("{") && guid.ends_with("}") {
-                    // 查询这个 GUID 对应的名称
                     let name_output = Command::new("reg")
                         .args([
                             "query",
-                            &format!(r"HKLM\SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{}", guid),
+                            &format!(r"HKLM\SYSTEM\CurrentControlSet\Control\Network\{{4D36E972-E325-11CE-BFC1-08002BE10318}}\{}", guid),
                         ])
                         .output();
 
@@ -185,27 +229,23 @@ fn find_adapter_guid(adapter_name: &str) -> Result<String> {
         }
     }
 
-    // 如果找不到，返回传入的名称
     Ok(adapter_name.to_string())
 }
 
 /// 设置 IP 地址
 pub async fn set_ip(name: &str, ip: &str, netmask: &str) -> Result<()> {
-    // 计算 CIDR
     let cidr = netmask_to_cidr(netmask);
 
-    // 使用 netsh 设置 IP
     let output = Command::new("netsh")
         .args([
             "interface", "ipv4", "set", "address",
-            name, "static", ip, &cidr.to_string()
+            name, "static", ip, &cidr.to_string(),
         ])
         .output()
         .context("设置 IP 地址失败")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // 如果设备名不是正确的接口名，尝试查找并使用 GUID
         if stderr.contains("参数不正确") || stderr.contains("not find") {
             tracing::warn!("设备 {} 不正确，尝试使用 TAP GUID", name);
             return set_ip_by_guid(name, ip, cidr).await;
@@ -218,8 +258,7 @@ pub async fn set_ip(name: &str, ip: &str, netmask: &str) -> Result<()> {
 }
 
 /// 通过 GUID 设置 IP
-async fn set_ip_by_guid(guid_or_name: &str, ip: &str, cidr: u32) -> Result<()> {
-    // 查找对应的 TAP 设备 GUID
+async fn set_ip_by_guid(_guid_or_name: &str, ip: &str, cidr: u32) -> Result<()> {
     let device_path = find_tap_device()?;
     let guid = device_path
         .trim_start_matches("\\\\.\\Global\\")
@@ -228,7 +267,7 @@ async fn set_ip_by_guid(guid_or_name: &str, ip: &str, cidr: u32) -> Result<()> {
     let output = Command::new("netsh")
         .args([
             "interface", "ipv4", "set", "address",
-            guid, "static", ip, &cidr.to_string()
+            &guid, "static", ip, &cidr.to_string(),
         ])
         .output()
         .context("通过 GUID 设置 IP 地址失败")?;
@@ -255,14 +294,11 @@ fn netmask_to_cidr(netmask: &str) -> u32 {
             cidr = (cidr << 8) | (n as u32);
         }
     }
-    // 计算前导 1 的个数
     cidr.count_ones()
 }
 
 /// 设置设备 UP
 pub async fn set_up(name: &str) -> Result<()> {
-    use std::process::Command;
-
     let output = Command::new("netsh")
         .args(["interface", "set", "interface", name, "admin=enabled"])
         .output()
@@ -279,8 +315,6 @@ pub async fn set_up(name: &str) -> Result<()> {
 
 /// 设置设备 DOWN
 pub async fn set_down(name: &str) -> Result<()> {
-    use std::process::Command;
-
     let output = Command::new("netsh")
         .args(["interface", "set", "interface", name, "admin=disabled"])
         .output()
@@ -297,9 +331,6 @@ pub async fn set_down(name: &str) -> Result<()> {
 
 /// 添加路由
 pub async fn add_route(dest: &str, gateway: &str) -> Result<()> {
-    use std::process::Command;
-
-    // 解析目标网络
     let (network, cidr) = parse_destination(dest)?;
     let gateway = if gateway.is_empty() || gateway == "0.0.0.0" {
         "0.0.0.0"
@@ -336,8 +367,6 @@ fn parse_destination(dest: &str) -> Result<(String, u32)> {
 
 /// 删除路由
 pub async fn remove_route(dest: &str) -> Result<()> {
-    use std::process::Command;
-
     let (network, cidr) = parse_destination(dest)?;
 
     let output = Command::new("route")
