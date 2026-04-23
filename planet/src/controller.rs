@@ -17,10 +17,18 @@ const API_PEER_HEARTBEAT: &str = "/api/v1/peer/heartbeat";
 const API_PEER_DISCOVER: &str = "/api/v1/peer/discover";
 const API_VERSION: &str = "/api/v1/version/client";
 
+/// API 响应包装器
+#[derive(Debug, serde::Deserialize)]
+pub struct ApiResponse<T> {
+    pub message: String,
+    pub data: T,
+}
+
 /// Peer 注册请求
 #[derive(Debug, serde::Serialize)]
 pub struct PeerRegisterRequest {
     pub device_id: String,
+    pub network_id: String,
     pub public_key: String,
     pub signature: String,
     pub hostname: String,
@@ -33,22 +41,22 @@ pub struct PeerRegisterRequest {
 pub struct PeerRegisterResponse {
     pub peer_id: String,
     pub assigned_ip: String,
-    pub network_id: String,
     pub network_info: Option<NetworkInfo>,
     pub policy_list: Option<Vec<PolicyRule>>,
     pub moon_list: Option<Vec<MoonInfo>>,
-    pub api_key: Option<String>,
-    pub api_secret: Option<String>,
-    pub online: bool,
 }
 
 /// 网络信息
 #[derive(Debug, serde::Deserialize)]
 pub struct NetworkInfo {
+    #[serde(alias = "id")]
     pub network_id: String,
+    pub name: String,
+    #[serde(alias = "cidr")]
     pub ip_range: String,
     pub gateway_ip: String,
-    pub dns_servers: Vec<String>,
+    #[serde(default)]
+    pub dns_servers: Option<Vec<String>>,
 }
 
 /// 策略规则
@@ -92,16 +100,30 @@ pub struct PolicyUpdate {
     pub action: String,
 }
 
+/// Moon 地址信息
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct MoonAddress {
+    #[serde(rename = "type")]
+    pub addr_type: String,
+    pub host: String,
+    pub port: u16,
+}
+
 /// Moon 信息
 #[derive(Debug, serde:: Deserialize, Clone)]
 pub struct MoonInfo {
+    pub id: String,
     pub domain: String,
+    #[serde(default)]
+    pub public_ip: Option<String>,
+    #[serde(default)]
+    pub internal_ip: Option<String>,
     pub relay_port: u16,
     pub wss_port: u16,
     pub weight: u32,
     pub online: bool,
     #[serde(default)]
-    pub public_ip: Option<String>,
+    pub addresses: Option<Vec<MoonAddress>>,
 }
 
 /// 发现响应
@@ -289,7 +311,7 @@ impl ControllerClient {
     }
 
     /// 注册设备到 Controller
-    pub async fn register(&self) -> Result<PeerRegisterResponse> {
+    pub async fn register(&mut self) -> Result<PeerRegisterResponse> {
         tracing::info!("开始注册设备到 Controller: {}", self.device_id);
 
         let hostname = hostname::get()
@@ -305,6 +327,7 @@ impl ControllerClient {
 
         let request = PeerRegisterRequest {
             device_id: self.device_id.clone(),
+            network_id: "00000000-0000-0000-0000-000000000001".to_string(), // 默认网络
             public_key: self.public_key(),
             signature: signature_hex,
             hostname,
@@ -313,16 +336,9 @@ impl ControllerClient {
         };
 
         let body = serde_json::to_vec(&request)?;
-        let response: PeerRegisterResponse = self.send_request("POST", API_PEER_REGISTER, &body).await?;
+        let wrapped: ApiResponse<PeerRegisterResponse> = self.send_request("POST", API_PEER_REGISTER, &body).await?;
 
-        // 保存 API Key/Secret
-        if let Some(api_key) = &response.api_key {
-            if let Some(api_secret) = &response.api_secret {
-                self.api_key = Some(api_key.clone());
-                self.api_secret = Some(api_secret.clone());
-                tracing::info!("获取到 API Key: {}", api_key);
-            }
-        }
+        let response = wrapped.data;
 
         self.set_connected(true).await;
         tracing::info!("设备注册成功: peer_id={}", response.peer_id);

@@ -381,7 +381,10 @@ async fn main() -> anyhow::Result<()> {
             println!("\n注册成功!");
             println!("  Peer ID: {}", register_resp.peer_id);
             println!("  分配 IP: {}", register_resp.assigned_ip);
-            println!("  网络 ID: {}", register_resp.network_id);
+            if let Some(ref network_info) = register_resp.network_info {
+                println!("  网络 ID: {}", network_info.network_id);
+                println!("  网络名称: {}", network_info.name);
+            }
 
             // 显示 Moon 节点
             if let Some(ref moon_list) = register_resp.moon_list {
@@ -411,32 +414,59 @@ async fn main() -> anyhow::Result<()> {
             if let Some(ref moon_list) = register_resp.moon_list {
                 let mut connected = false;
                 for moon in moon_list.iter().filter(|m| m.online) {
-                    let moon_addr = format!("{}:{}", moon.domain, moon.relay_port);
-                    println!("  尝试连接: {}", moon_addr);
+                    println!("  Moon: {} (weight: {})", moon.domain, moon.weight);
 
-                    match tunnel_manager.create(TunnelType::Moon, &moon_addr).await {
-                        Ok(id) => {
-                            match tunnel_manager.connect(&id).await {
-                                Ok(_) => {
-                                    if let Err(e) = tunnel_manager.set_active(&id) {
-                                        println!("  设置活动隧道失败: {}", e);
-                                        continue;
-                                    }
-                                    println!("  已连接到 {}", moon_addr);
-                                    connected = true;
-                                    break;
-                                }
-                                Err(e) => {
-                                    println!("  连接失败: {}", e);
-                                    continue;
-                                }
+                    // 构建地址列表：优先使用 addresses 数组，否则从字段构建
+                    let address_list: Vec<(&str, u16)> = if let Some(ref addrs) = moon.addresses {
+                        addrs.iter()
+                            .map(|a| (a.host.as_str(), a.port))
+                            .collect()
+                    } else {
+                        // 兼容性：从旧字段构建
+                        let mut addrs = Vec::new();
+                        if let Some(ref ip) = moon.internal_ip {
+                            if !ip.is_empty() {
+                                addrs.push((ip.as_str(), moon.relay_port));
                             }
                         }
-                        Err(e) => {
-                            println!("  创建隧道失败: {}", e);
-                            continue;
+                        if let Some(ref ip) = moon.public_ip {
+                            if !ip.is_empty() {
+                                addrs.push((ip.as_str(), moon.relay_port));
+                            }
+                        }
+                        addrs.push((&moon.domain, moon.relay_port));
+                        addrs
+                    };
+
+                    for (moon_host, moon_port) in &address_list {
+                        let moon_addr = format!("{}:{}", moon_host, moon_port);
+                        println!("  尝试连接: {}", moon_addr);
+
+                        match tunnel_manager.create(TunnelType::Moon, &moon_addr).await {
+                            Ok(id) => {
+                                match tunnel_manager.connect(&id).await {
+                                    Ok(_) => {
+                                        if let Err(e) = tunnel_manager.set_active(&id) {
+                                            println!("  设置活动隧道失败: {}", e);
+                                            continue;
+                                        }
+                                        println!("  已连接到 {}", moon_addr);
+                                        connected = true;
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        println!("  连接失败: {}", e);
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("  创建隧道失败: {}", e);
+                                continue;
+                            }
                         }
                     }
+                    if connected { break; }
                 }
 
                 if !connected {

@@ -2,7 +2,7 @@
 //!
 //! 负责路由策略、DNS 策略、URL 过滤和流量限制
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -309,7 +309,7 @@ impl UrlMatcher {
     /// 添加 URL 模式
     pub fn add_url_pattern(&mut self, pattern: &str) -> Result<()> {
         let regex = regex::Regex::new(pattern)
-            .with_context(|| format!("无效的 URL 正则模式: {}", pattern))?;
+            .context(format!("无效的 URL 正则模式: {}", pattern))?;
         self.url_patterns.push(regex);
         Ok(())
     }
@@ -379,9 +379,10 @@ impl PolicyEngine {
 
     /// 添加策略规则
     pub fn add_rule(&mut self, rule: PolicyRule) {
+        let name = rule.name.clone();
         self.rules.push(rule);
         self.rules.sort_by_key(|r| r.priority);
-        tracing::info!("添加策略规则: {}", rule.name);
+        tracing::info!("添加策略规则: {}", name);
     }
 
     /// 移除策略规则

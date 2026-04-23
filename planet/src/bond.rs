@@ -291,7 +291,7 @@ impl BondManager {
     }
 
     /// 获取最佳链路 (根据模式)
-    pub fn select_link(&self) -> Option<String> {
+    pub fn select_link(&mut self) -> Option<String> {
         if !self.config.enabled {
             return self.config.primary_link.clone();
         }
@@ -305,16 +305,19 @@ impl BondManager {
     }
 
     /// 轮询选择
-    fn select_round_robin(&self) -> Option<String> {
-        let active_links: Vec<_> = self.get_active_links().into_iter().collect();
-        if active_links.is_empty() {
+    fn select_round_robin(&mut self) -> Option<String> {
+        let ids: Vec<String> = self.get_active_links()
+            .iter()
+            .map(|l| l.id.clone())
+            .collect();
+        if ids.is_empty() {
             return None;
         }
 
-        let index = self.round_robin_index % active_links.len();
+        let index = self.round_robin_index % ids.len();
         self.round_robin_index += 1;
 
-        Some(active_links[index].id.clone())
+        Some(ids[index].clone())
     }
 
     /// 加权轮询选择
@@ -336,7 +339,7 @@ impl BondManager {
         let target = rng.gen_range(0..total_weight);
 
         let mut accumulated = 0u32;
-        for link in active_links {
+        for link in &active_links {
             accumulated += link.weight;
             if accumulated > target {
                 return Some(link.id.clone());
@@ -383,6 +386,10 @@ impl BondManager {
     pub fn check_links(&mut self) {
         let now = std::time::Instant::now();
 
+        // 复制阈值以避免在迭代过程中借用 self
+        let threshold_rtt = self.config.failover_threshold_rtt_ms;
+        let threshold_loss = self.config.failover_threshold_loss_rate;
+
         for link in self.links.values_mut() {
             // 检查链路是否超时
             if now.duration_since(link.last_update).as_secs() > 60 {
@@ -391,8 +398,11 @@ impl BondManager {
                 continue;
             }
 
-            // 检查链路质量
-            if !self.is_link_healthy(link) {
+            // 检查链路质量 - 使用预先复制的阈值避免borrow冲突
+            let is_healthy = link.rtt_ms < threshold_rtt
+                && link.loss_rate < threshold_loss;
+
+            if !is_healthy {
                 if link.status == LinkStatus::Active {
                     link.status = LinkStatus::Standby;
                     tracing::warn!(
@@ -444,23 +454,20 @@ impl BondManager {
             .map(|l| l.bandwidth_mbps)
             .sum();
 
-        let avg_rtt: u32 = if let Some(count) = self.get_active_links().len() {
-            if count > 0 {
-                self.links
-                    .values()
-                    .filter(|l| l.status == LinkStatus::Active)
-                    .map(|l| l.rtt_ms)
-                    .sum::<u32>() / count as u32
-            } else {
-                0
-            }
+        let count = self.get_active_links().len();
+        let avg_rtt: u32 = if count > 0 {
+            self.links
+                .values()
+                .filter(|l| l.status == LinkStatus::Active)
+                .map(|l| l.rtt_ms)
+                .sum::<u32>() / count as u32
         } else {
             0
         };
 
         BondStats {
             total_links: self.links.len(),
-            active_links: self.get_active_links().len(),
+            active_links: count,
             state: self.state,
             total_bandwidth_mbps: total_bandwidth,
             average_rtt_ms: avg_rtt,

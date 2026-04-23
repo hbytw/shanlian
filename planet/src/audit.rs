@@ -2,7 +2,7 @@
 //!
 //! 负责审计日志的本地存储和上报
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 
 /// 日志级别
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum LogLevel {
     Debug,
     Info,
@@ -30,7 +30,7 @@ impl std::fmt::Display for LogLevel {
 }
 
 /// 审计日志类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuditType {
     /// 访问日志
     Access,
@@ -57,7 +57,7 @@ impl std::fmt::Display for AuditType {
 }
 
 /// 审计日志条目
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AuditLog {
     /// 时间戳
     pub timestamp: SystemTime,
@@ -238,7 +238,7 @@ pub struct AuditReporter {
     /// 配置
     config: AuditConfig,
     /// 日志缓冲
-    buffer: VecDeque<AuditLog>,
+    buffer: Arc<RwLock<VecDeque<AuditLog>>>,
     /// HTTP 客户端
     client: reqwest::Client,
     /// 设备 ID
@@ -256,7 +256,7 @@ impl AuditReporter {
 
         let reporter = Self {
             config: config.clone(),
-            buffer: VecDeque::with_capacity(config.buffer_size),
+            buffer: Arc::new(RwLock::new(VecDeque::with_capacity(config.buffer_size))),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
@@ -345,16 +345,14 @@ impl AuditReporter {
     /// 批量上报日志
     pub async fn flush(&self) -> Result<()> {
         let logs = {
-            let mut buffer = self.buffer.write().await
-                ;
+            let mut buffer = self.buffer.write().await;
             if buffer.is_empty() {
                 return Ok(());
             }
 
             // 获取待上报的日志
-            let logs: Vec<_> = buffer
-                .drain(..self.config.batch_size.min(buffer.len()))
-                .collect();
+            let drain_count = self.config.batch_size.min(buffer.len());
+            let logs: Vec<_> = buffer.drain(..drain_count).collect();
             logs
         };
 

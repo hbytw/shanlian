@@ -3,11 +3,7 @@
 //! 负责在 Linux/Windows/macOS 上创建和管理 TUN 虚拟网卡
 
 use anyhow::{Context, Result};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::PathBuf;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tokio::net::unix::AsyncFd;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -21,55 +17,52 @@ mod darwin;
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod other;
 
-/// TUN 设备句柄
+/// TUN 设备句柄 - 跨平台抽象
+#[cfg(unix)]
 pub struct TunDevice {
-    /// 文件描述符 (用于异步 I/O)
-    fd: AsyncFd<std::os::fd::RawFd>,
-    /// 设备名称 (如 "tun0", "planet0")
+    fd: std::os::fd::RawFd,
     name: String,
-    /// MTU 大小
+    mtu: u32,
+}
+
+/// Windows TUN 设备句柄
+#[cfg(windows)]
+pub struct TunDevice {
+    handle: windows::TapHandle,
+    name: String,
+    mtu: u32,
+}
+
+/// 非 Unix 非 Windows 平台
+#[cfg(not(any(unix, windows)))]
+pub struct TunDevice {
+    fd: i32,
+    name: String,
     mtu: u32,
 }
 
 impl TunDevice {
     /// 创建新的 TUN 设备
     pub async fn new(name: &str, mtu: u32) -> Result<Self> {
-        let raw_fd = Self::open(name, mtu).await?;
-
-        // 将 RawFd 包装为 AsyncFd
-        let fd = AsyncFd::new(raw_fd)
-            .context("创建 AsyncFd 失败")?;
-
-        let dev = Self {
-            fd,
-            name: name.to_string(),
-            mtu,
-        };
-
-        tracing::info!("TUN 设备 {} 创建成功 (MTU: {})", dev.name, dev.mtu);
-        Ok(dev)
-    }
-
-    /// 打开 TUN 设备 (平台特定实现)
-    async fn open(name: &str, mtu: u32) -> Result<std::os::fd::RawFd> {
         #[cfg(target_os = "linux")]
         {
-            linux::open_tun(name, mtu).await
+            let fd = linux::open_tun(name, mtu).await?;
+            tracing::info!("TUN 设备 {} 创建成功 (MTU: {})", name, mtu);
+            Ok(Self { fd, name: name.to_string(), mtu })
         }
 
         #[cfg(target_os = "windows")]
         {
-            windows::open_tun(name, mtu).await
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            darwin::open_tun(name, mtu).await
+            let handle = windows::open_tun(name, mtu).await?;
+            tracing::info!("TUN 设备 {} 创建成功 (MTU: {})", name, mtu);
+            Ok(Self { handle, name: name.to_string(), mtu })
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
-            other::open_tun(name, mtu).await
+            let fd = other::open_tun(name, mtu).await?;
+            tracing::info!("TUN 设备 {} 创建成功 (MTU: {})", name, mtu);
+            Ok(Self { fd, name: name.to_string(), mtu })
         }
     }
 
@@ -203,75 +196,136 @@ impl TunDevice {
         self.add_route("0.0.0.0/0", gateway).await
     }
 
-    /// 异步读取 IP 包
+    /// 异步读取 IP 包 (Unix)
+    #[cfg(target_os = "linux")]
     pub async fn read_packet(&self, buf: &mut [u8]) -> Result<usize> {
+        use std::os::fd::AsRawFd;
+        let fd = self.fd;
         loop {
-            let mut guard = self.fd.readable().await?;
-
-            match guard.try_io(|fd| {
-                // SAFETY: fd is valid and we own it
-                let fd = fd.as_raw_fd();
-                let ret = unsafe {
-                    libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-                };
-                if ret < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(ret as usize)
+            let ret = unsafe {
+                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if ret < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    continue;
                 }
-            }) {
-                Ok(result) => return result,
-                Err(_) => continue,
+                return Err(err.into());
             }
+            return Ok(ret as usize);
         }
     }
 
-    /// 异步写入 IP 包
+    /// 异步写入 IP 包 (Unix)
+    #[cfg(target_os = "linux")]
     pub async fn write_packet(&self, buf: &[u8]) -> Result<usize> {
-        loop {
-            let mut guard = self.fd.writable().await?;
-
-            match guard.try_io(|fd| {
-                // SAFETY: fd is valid and we own it
-                let fd = fd.as_raw_fd();
-                let ret = unsafe {
-                    libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len())
-                };
-                if ret < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(ret as usize)
-                }
-            }) {
-                Ok(result) => return result,
-                Err(_) => continue,
-            }
+        use std::os::fd::AsRawFd;
+        let fd = self.fd;
+        let ret = unsafe {
+            libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len())
+        };
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error().into());
         }
+        Ok(ret as usize)
+    }
+
+    /// 异步读取 IP 包 (macOS)
+    #[cfg(target_os = "macos")]
+    pub async fn read_packet(&self, buf: &mut [u8]) -> Result<usize> {
+        use std::os::fd::AsRawFd;
+        let fd = self.fd;
+        let ret = unsafe {
+            libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+        };
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(ret as usize)
+    }
+
+    /// 异步写入 IP 包 (macOS)
+    #[cfg(target_os = "macos")]
+    pub async fn write_packet(&self, buf: &[u8]) -> Result<usize> {
+        use std::os::fd::AsRawFd;
+        let fd = self.fd;
+        let ret = unsafe {
+            libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len())
+        };
+        if ret < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(ret as usize)
+    }
+
+    /// 异步读取 IP 包 (Windows)
+    #[cfg(windows)]
+    pub async fn read_packet(&self, buf: &mut [u8]) -> Result<usize> {
+        windows::read_packet(&self.handle, buf).await
+    }
+
+    /// 异步写入 IP 包 (Windows)
+    #[cfg(windows)]
+    pub async fn write_packet(&self, buf: &[u8]) -> Result<usize> {
+        windows::write_packet(&self.handle, buf).await
+    }
+
+    /// 异步读取 IP 包 (其他平台 - 存根实现)
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    pub async fn read_packet(&self, _buf: &mut [u8]) -> Result<usize> {
+        anyhow::bail!("此平台 TUN read_packet 暂未实现")
+    }
+
+    /// 异步写入 IP 包 (其他平台 - 存根实现)
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    pub async fn write_packet(&self, _buf: &[u8]) -> Result<usize> {
+        anyhow::bail!("此平台 TUN write_packet 暂未实现")
     }
 
     /// 关闭设备
+    #[cfg(target_os = "linux")]
     pub async fn close(self) -> Result<()> {
-        tracing::info!("关闭 TUN 设备 {}", self.name);
-
-        // 从 AsyncFd 获取 RawFd 并关闭
-        let raw_fd = self.fd.into_inner();
+        let name = self.name.clone();
+        tracing::info!("关闭 TUN 设备 {}", name);
         unsafe {
-            libc::close(raw_fd);
+            libc::close(self.fd);
         }
+        tracing::info!("TUN 设备 {} 已关闭", name);
+        Ok(())
+    }
 
+    /// 关闭设备 (macOS)
+    #[cfg(target_os = "macos")]
+    pub async fn close(self) -> Result<()> {
+        let name = self.name.clone();
+        tracing::info!("关闭 TUN 设备 {}", name);
+        unsafe {
+            libc::close(self.fd);
+        }
+        tracing::info!("TUN 设备 {} 已关闭", name);
+        Ok(())
+    }
+
+    /// 关闭设备 (Windows)
+    #[cfg(windows)]
+    pub async fn close(self) -> Result<()> {
+        windows::close_tap(self.handle).await?;
         tracing::info!("TUN 设备 {} 已关闭", self.name);
+        Ok(())
+    }
+
+    /// 关闭设备 (其他平台 - 存根)
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    pub async fn close(self) -> Result<()> {
+        let name = self.name.clone();
+        tracing::info!("关闭 TUN 设备 {}", name);
         Ok(())
     }
 }
 
-impl Drop for TunDevice {
-    fn drop(&mut self) {
-        tracing::debug!("TUN 设备 {} 被 drop", self.name);
-    }
-}
-
 /// TUN 设备配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TunConfig {
     /// 设备名称
     pub name: String,
