@@ -89,17 +89,21 @@ impl Crypto {
 
     /// 加密数据
     pub fn encrypt(&self, plaintext: &[u8], nonce: &[u8; 12]) -> Result<Vec<u8>> {
-        let cipher = ChaCha20Poly1305::new_from_slice(&self.shared_secret)?;
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.shared_secret)
+            .map_err(|e| anyhow::anyhow!("ChaCha20Poly1305 init failed: {:?}", e))?;
         let nonce = Nonce::from_slice(nonce);
-        let ciphertext = cipher.encrypt(nonce, plaintext)?;
+        let ciphertext = cipher.encrypt(nonce, plaintext)
+            .map_err(|e| anyhow::anyhow!("Encryption failed: {:?}", e))?;
         Ok(ciphertext)
     }
 
     /// 解密数据
     pub fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; 12]) -> Result<Vec<u8>> {
-        let cipher = ChaCha20Poly1305::new_from_slice(&self.shared_secret)?;
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.shared_secret)
+            .map_err(|e| anyhow::anyhow!("ChaCha20Poly1305 init failed: {:?}", e))?;
         let nonce = Nonce::from_slice(nonce);
-        let plaintext = cipher.decrypt(nonce, ciphertext)?;
+        let plaintext = cipher.decrypt(nonce, ciphertext)
+            .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
         Ok(plaintext)
     }
 }
@@ -114,9 +118,108 @@ pub fn generate_nonce() -> [u8; 12] {
 
 /// HMAC-SHA256 签名
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
-    type HmacSha256 = Hmac<sha2::Sha256>;
-    let mut mac = HmacSha256::new_from_slice(key).unwrap();
+    use hmac::Mac;
+    type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+        .expect("HMAC key size should be valid");
     mac.update(data);
     hex::encode(mac.finalize().into_bytes()).into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keypair_generate() {
+        let keypair = KeyPair::generate();
+        assert_eq!(keypair.public_key().len(), 64); // hex encoded 32 bytes
+    }
+
+    #[test]
+    fn test_sign_and_verify() {
+        let keypair = KeyPair::generate();
+        let data = b"Hello, VPN!";
+        let signature = keypair.sign(data);
+        assert!(keypair.verify(data, &signature));
+    }
+
+    #[test]
+    fn test_sign_verify_fail() {
+        let keypair = KeyPair::generate();
+        let data = b"Hello, VPN!";
+        let signature = keypair.sign(data);
+        let wrong_data = b"Hello, VPN?";
+        assert!(!keypair.verify(wrong_data, &signature));
+    }
+
+    #[test]
+    fn test_crypto_encrypt_decrypt() {
+        let keypair = KeyPair::generate();
+        let crypto = Crypto::new(*keypair.verifying_key.as_bytes());
+        let plaintext = b"Test VPN packet data";
+        let nonce = generate_nonce();
+
+        let ciphertext = crypto.encrypt(plaintext, &nonce).unwrap();
+        let decrypted = crypto.decrypt(&ciphertext, &nonce).unwrap();
+
+        assert_eq!(plaintext.to_vec(), decrypted);
+    }
+
+    #[test]
+    fn test_crypto_wrong_nonce() {
+        let keypair = KeyPair::generate();
+        let crypto = Crypto::new(*keypair.verifying_key.as_bytes());
+        let plaintext = b"Test VPN packet data";
+        let nonce = generate_nonce();
+        let wrong_nonce = generate_nonce();
+
+        let ciphertext = crypto.encrypt(plaintext, &nonce).unwrap();
+        let result = crypto.decrypt(&ciphertext, &wrong_nonce);
+        assert!(result.is_err()); // Should fail with wrong nonce
+    }
+
+    #[test]
+    fn test_hmac_sha256() {
+        let key = b"secret_key";
+        let data = b"test data";
+        let hmac1 = hmac_sha256(key, data);
+        let hmac2 = hmac_sha256(key, data);
+        assert_eq!(hmac1, hmac2);
+    }
+
+    #[test]
+    fn test_hmac_sha256_different_data() {
+        let key = b"secret_key";
+        let hmac1 = hmac_sha256(key, b"data1");
+        let hmac2 = hmac_sha256(key, b"data2");
+        assert_ne!(hmac1, hmac2);
+    }
+
+    #[test]
+    fn test_x25519_key_exchange() {
+        use x25519_dalek::{PublicKey, StaticSecret};
+        use rand::SeedableRng;
+        use rand::rngs::OsRng;
+
+        let local_private = StaticSecret::new(OsRng);
+        let local_public = PublicKey::from(&local_private);
+
+        let remote_private = StaticSecret::new(OsRng);
+        let remote_public = PublicKey::from(&remote_private);
+
+        // Both should derive the same shared secret
+        let secret1 = local_private.diffie_hellman(&remote_public);
+        let secret2 = remote_private.diffie_hellman(&local_public);
+
+        assert_eq!(*secret1.as_bytes(), *secret2.as_bytes());
+    }
+
+    #[test]
+    fn test_generate_nonce() {
+        let nonce1 = generate_nonce();
+        let nonce2 = generate_nonce();
+        assert_ne!(nonce1, nonce2); // Should be random
+        assert_eq!(nonce1.len(), 12); // 12 bytes
+    }
 }

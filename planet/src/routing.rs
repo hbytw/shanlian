@@ -324,3 +324,76 @@ impl Default for RoutingTable {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_route_creation() {
+        let network: Ipv4Network = "10.8.0.0/24".parse().unwrap();
+        let route = Route {
+            dest: network,
+            gateway: "10.8.0.1".to_string(),
+            interface: "planet0".to_string(),
+            metric: 100,
+        };
+
+        assert_eq!(route.gateway, "10.8.0.1");
+        assert_eq!(route.interface, "planet0");
+        assert_eq!(route.metric, 100);
+    }
+
+    #[test]
+    fn test_dns_config() {
+        let config = DnsConfig {
+            servers: vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()],
+            search_domains: vec!["local".to_string()],
+        };
+
+        assert_eq!(config.servers.len(), 2);
+        assert_eq!(config.search_domains.len(), 1);
+    }
+
+    #[test]
+    fn test_routing_table_new() {
+        let table = RoutingTable::new();
+        assert!(table.list().is_empty());
+        assert!(table.default_route.is_none());
+        assert!(!table.is_dns_hijack_enabled());
+    }
+
+    #[test]
+    fn test_routing_table_dns() {
+        let table = RoutingTable::new();
+        let dns = table.get_dns();
+        // DNS should be empty initially (vpn_dns is internal state)
+        assert!(dns.servers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_add_default_route() {
+        let mut table = RoutingTable::new();
+
+        // Set default route
+        table.add_route("0.0.0.0/0", "10.8.0.1").await.unwrap();
+
+        // Check default route
+        assert!(table.default_route.is_some());
+        let default = table.default_route.unwrap();
+        assert_eq!(default.gateway, "10.8.0.1");
+    }
+
+    #[test]
+    fn test_ipv4_network_parsing() {
+        let network: Ipv4Network = "192.168.1.0/24".parse().unwrap();
+        assert_eq!(network.prefix(), 24);
+        assert_eq!(network.ip().to_string(), "192.168.1.0");
+    }
+
+    #[test]
+    fn test_ipv4_network_invalid() {
+        let result: Result<Ipv4Network, _> = "invalid".parse();
+        assert!(result.is_err());
+    }
+}

@@ -127,9 +127,6 @@ impl NatHandler {
             .await
             .context("绑定 UDP socket 失败")?;
 
-        socket.set_read_timeout(Some(Duration::from_secs(10)))
-            .context("设置读取超时失败")?;
-
         self.socket = Some(Arc::new(socket));
         tracing::info!("NAT 处理器初始化成功");
         Ok(())
@@ -141,18 +138,20 @@ impl NatHandler {
             self.init().await?;
         }
 
-        let socket = self.socket.as_ref().unwrap();
-        let local_addr = socket.local_addr().context("获取本地地址失败")?;
+        let local_addr = {
+            let socket = self.socket.as_ref().unwrap();
+            socket.local_addr().context("获取本地地址失败")?
+        };
 
         tracing::info!("开始 NAT 类型检测...");
 
         // 第一步：获取公网地址
-        let (public_ip, public_port) = self.query_public_ip(socket).await?;
+        let (public_ip, public_port) = self.query_public_ip().await?;
 
         tracing::info!("公网地址: {}:{}", public_ip, public_port);
 
         // 第二步：测试端口是否保持不变 (检测对称 NAT)
-        let (public_ip2, public_port2) = self.query_public_ip_with_different_server(socket).await?;
+        let (public_ip2, public_port2) = self.query_public_ip_with_different_server().await?;
 
         let nat_type = if public_ip == public_ip2 && public_port == public_port2 {
             // 端口保持不变，可能是开放或锥型 NAT
@@ -169,7 +168,7 @@ impl NatHandler {
                 NatType::Open
             } else {
                 // 有 NAT，进一步测试
-                self.classify_nat_type(socket, public_ip.as_str(), public_port).await?
+                self.classify_nat_type(public_ip.as_str(), public_port).await?
             }
         } else {
             nat_type
@@ -189,11 +188,11 @@ impl NatHandler {
     }
 
     /// 向 STUN 服务器查询公网 IP
-    async fn query_public_ip(&self, socket: &UdpSocket) -> Result<(String, u16)> {
+    async fn query_public_ip(&self) -> Result<(String, u16)> {
         let socket = self.socket.as_ref().context("socket 未初始化")?;
 
         for server in &self.stun_servers {
-            match self.send_binding_request(socket, &server.host, server.port).await {
+            match self.send_binding_request(&server.host, server.port).await {
                 Ok((ip, port)) => return Ok((ip, port)),
                 Err(e) => {
                     tracing::warn!("STUN 服务器 {} 失败: {}", server.host, e);
@@ -206,24 +205,20 @@ impl NatHandler {
     }
 
     /// 使用不同的 STUN 服务器查询
-    async fn query_public_ip_with_different_server(
-        &self,
-        socket: &UdpSocket,
-    ) -> Result<(String, u16)> {
+    async fn query_public_ip_with_different_server(&self) -> Result<(String, u16)> {
         // 如果有多个服务器，用第二个查询
         if self.stun_servers.len() >= 2 {
             let server = &self.stun_servers[1];
-            return self.send_binding_request(socket, &server.host, server.port).await;
+            return self.send_binding_request(&server.host, server.port).await;
         }
 
         // 否则使用不同的地址
-        self.send_binding_request(socket, "stun.xtels.cn", 3478).await
+        self.send_binding_request("stun.xtels.cn", 3478).await
     }
 
     /// 发送 STUN Binding Request
     async fn send_binding_request(
         &self,
-        socket: &UdpSocket,
         server_host: &str,
         server_port: u16,
     ) -> Result<(String, u16)> {
@@ -247,8 +242,7 @@ impl NatHandler {
         let mut response_buf = [0u8; 1024];
         let (n, _) = timeout(Duration::from_secs(5), socket.recv_from(&mut response_buf))
             .await
-            .context("STUN 响应超时")??
-            .1;
+            .map_err(|_| anyhow::anyhow!("STUN 响应超时"))??;
 
         // 解析响应
         self.parse_binding_response(&response_buf[..n], &transaction_id)
@@ -343,7 +337,6 @@ impl NatHandler {
     /// 根据多次测试结果分类 NAT 类型
     async fn classify_nat_type(
         &mut self,
-        socket: &UdpSocket,
         public_ip: &str,
         public_port: u16,
     ) -> Result<NatType> {
@@ -414,5 +407,50 @@ impl NatHandler {
 impl Default for NatHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nat_type_display() {
+        assert_eq!(NatType::Open.to_string(), "开放 (无 NAT)");
+        assert_eq!(NatType::FullCone.to_string(), "全锥型 NAT");
+        assert_eq!(NatType::Symmetric.to_string(), "对称 NAT (无法 P2P)");
+    }
+
+    #[test]
+    fn test_nat_type_supports_p2p() {
+        assert!(NatType::Open.supports_p2p());
+        assert!(NatType::FullCone.supports_p2p());
+        assert!(NatType::RestrictedCone.supports_p2p());
+        assert!(NatType::PortRestrictedCone.supports_p2p());
+        assert!(!NatType::Symmetric.supports_p2p()); // Symmetric does NOT support P2P
+    }
+
+    #[test]
+    fn test_nat_info_creation() {
+        let info = NatInfo {
+            nat_type: NatType::FullCone,
+            public_ip: "1.2.3.4".to_string(),
+            public_port: 12345,
+            local_ip: "192.168.1.100".to_string(),
+            local_port: 8080,
+            hole_punchable: true,
+        };
+
+        assert_eq!(info.nat_type, NatType::FullCone);
+        assert_eq!(info.public_ip, "1.2.3.4");
+        assert_eq!(info.public_port, 12345);
+        assert!(info.hole_punchable);
+    }
+
+    #[test]
+    fn test_nat_handler_new() {
+        let handler = NatHandler::new();
+        // Newly created handler should not have socket initialized
+        assert!(handler.socket.is_none());
     }
 }
