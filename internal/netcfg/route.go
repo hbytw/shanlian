@@ -2,6 +2,8 @@ package netcfg
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 )
 
@@ -256,4 +258,42 @@ func (s *System) EnsureAddrOnLoopback(ip string) (bool, error) {
 // RemoveAddrFromLoopback 从 lo 上删除内层地址。
 func (s *System) RemoveAddrFromLoopback(ip string) {
 	_, _ = s.runCmd(s.IP, "addr", "del", ip+"/32", "dev", "lo")
+}
+
+// TableRoutes 列出路由表里的所有路由行。
+//
+// 用于「清理上一轮残留」时判断表里还有没有指向**已消失设备**的路由。
+func (s *System) TableRoutes(table int) ([]string, error) {
+	out, err := s.runCmd(s.IP, "route", "show", "table", strconv.Itoa(table))
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// DeviceExists 判断网卡在系统里是否还存在。
+//
+// /sys/class/net/<dev> 是内核暴露的网卡列表 —— 设备没了，这个目录项就没了。
+func DeviceExists(dev string) bool {
+	if dev == "" {
+		return false
+	}
+	_, err := os.Stat("/sys/class/net/" + dev)
+	return err == nil
+}
+
+// RouteDevice 解析一行路由里的设备名。
+//
+// 形如 "default dev slx0" / "10.0.0.0/8 dev eth0 table 100" ⇒ "slx0" / "eth0"。
+func RouteDevice(route string) string {
+	fields := strings.Fields(route)
+	for i, f := range fields {
+		if f == "dev" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,55 @@ type dispatchState struct {
 	// 也不会顺手把内网网卡之间的转发也放行（那是安全策略的变化，
 	// 不该由看门狗顺手做）。
 	forwardPresent map[string]map[bool]bool
+}
+
+// cleanupStaleRoutes 清理上一轮残留的、指向**已不存在设备**的路由。
+//
+// # 判据（必须保守）
+//
+// 只删「设备已经不在了」的路由 —— 那一定是上一轮进程的残留
+// （设备随进程消失，路由却留下来了）。
+// 活路由一条都不动，也不动别的表。
+//
+// # 什么时候跑
+//
+// **只在启动时跑一次**（不是看门狗、不是运行期）。
+// 运行期做任何「检测到异常就清理/重建」的动作都可能引发连锁反应
+// —— 上线纪律：宁可不动，也不要误触发。
+func cleanupStaleRoutes(log *slog.Logger, sys *netcfg.System) {
+	if sys == nil {
+		return
+	}
+	routes, err := sys.TableRoutes(dispatch.RouteTable)
+	if err != nil {
+		return
+	}
+	removed := 0
+	for _, r := range routes {
+		dev := netcfg.RouteDevice(r)
+		if dev == "" || netcfg.DeviceExists(dev) {
+			continue
+		}
+		if sys.RemoveTableRoute(dispatch.RouteTable, "", dev) {
+			removed++
+			log.Info("清理上一轮残留的失效路由",
+				logx.FieldEvent, "dispatch.stale_route_removed",
+				"table", dispatch.RouteTable,
+				"dev", dev,
+				logx.Hint("上一轮进程被强杀，路由残留而网卡已消失；不清理会让境外流量被黑洞"))
+		}
+	}
+	if removed == 0 {
+		return
+	}
+	// 表里已经空了 ⇒ 指向它的 fwmark 规则也会把包丢进黑洞 ⇒ 一并撤掉。
+	// （这条 ip rule 是我们自己装的，规格固定，撤掉最坏结果是分流不生效。）
+	if sys.IPRuleExists(dispatch.RulePriorityMark, "fwmark 0x100", strconv.Itoa(dispatch.RouteTable)) {
+		sys.RemoveIPRule(dispatch.RulePriorityMark, "fwmark 0x100", strconv.Itoa(dispatch.RouteTable))
+		log.Info("撤掉指向空路由表的分流规则",
+			logx.FieldEvent, "dispatch.stale_rule_removed",
+			"priority", dispatch.RulePriorityMark)
+	}
 }
 
 // setupDispatch 准备分流：取国内网段数据，算出要做分流的接口。
@@ -146,6 +196,19 @@ func setupDispatch(ctx context.Context, log *slog.Logger, c *config.Config, env 
 	}
 
 	sys := netcfg.NewSystem(nil)
+
+	// —— 清理上一轮的残留（只在启动时做一次）——
+	//
+	// 场景：进程被 kill -9 / OOM / 掉电时，cleanup 没跑 ⇒
+	// ip rule 1000（fwmark → table 100）与 table 100 里的
+	// "default dev slx0" 残留下来，而 slx0 已随进程消失
+	// ⇒ 被标记 0x100 的包被内核丢掉 ⇒ **境外流量被黑洞**
+	// （不是回退直连），而 procd 一小时只重启 5 次 ⇒ 黑洞状态被固化。
+	//
+	// 判据必须保守：**只删指向「已经不存在」的设备的路由**，
+	// 一条活路由都不动；也不碰任何别的表、别的规则。
+	// 运行期绝不做这种事 —— 这里只在启动时跑一次。
+	cleanupStaleRoutes(log, sys)
 
 	// 快照「启动时哪些 FORWARD 放行规则在位」。
 	//
