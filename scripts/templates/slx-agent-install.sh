@@ -25,6 +25,12 @@ CONFIG_DIR="/etc/slx"
 CONFIG="${CONFIG_DIR}/config.yaml"
 AGENT_USER="slxagent"
 
+# 公网直连（双通道）相关。
+# TLS_LISTEN：本机监听地址（网关来连我）；ADVERTISE：本机公网地址（从外面怎么找到我）。
+# 两者不同，别填反。留空 ADVERTISE 表示「还没想好公网 IP」，此时只有 ZeroTier 通道。
+TLS_LISTEN="${TLS_LISTEN:-0.0.0.0:8443}"
+ADVERTISE="${ADVERTISE:-}"
+
 if [ -t 1 ]; then
 	R='\033[31m'; G='\033[32m'; Y='\033[33m'; B='\033[36m'; D='\033[2m'; N='\033[0m'
 else
@@ -159,6 +165,19 @@ gateway_addr: "${GATEWAY}"
 transport_mode: proxy
 log_level: info
 log_format: text
+# —— 公网直连（双通道）——
+#
+# 不写这三项的话，这个 agent 永远只有 ZeroTier 一条通道：
+# 网关 auto 模式下也建不出直连，症状极其隐蔽（agent 侧只打一条 Warn）。
+#
+# relay_tls_listen 是**本机监听**的地址（host:port），网关会来连它；
+# relay_advertise 是**本机的公网地址**（要能被网关拨通）。
+# 两者不同：一个是"我在哪听"，一个是"从外面怎么找到我"。
+relay_tls_listen: "${TLS_LISTEN}"
+relay_advertise: "${ADVERTISE}"
+# 证书必须放在 agent 用户可写的地方：服务以非 root 跑，
+# 写不了 /etc/slx 下的文件（默认路径 /etc/slx/relay-cert.pem 就是 root 属主）。
+relay_tls_cert: "/var/lib/slx/relay-cert.pem"
 EOF
 # 配置里含密钥；服务以非 root 跑，所以属主必须是它
 chown "$RUN_USER" "$CONFIG" 2>/dev/null || true
@@ -180,8 +199,11 @@ Wants=network-online.target
 Type=simple
 User=${RUN_USER}
 ExecStart=${INSTALL_DIR}/slx agent --config ${CONFIG}
-Restart=always
-RestartSec=5
+Restart=on-failure
+# 退避 30 秒（与应用内 30 秒重连退避一致）。
+# 之前是 5 秒：网络抖动时 agent 会疯狂重启，
+# 而每次重启都要重新握手 —— 家宽上行小的时候会把带宽吃光。
+RestartSec=30
 LimitNOFILE=65536
 TimeoutStopSec=15
 StandardOutput=journal
@@ -207,7 +229,8 @@ pidfile="/run/slx.pid"
 command_user="${AGENT_USER}"
 output_log="/var/log/slx.log"
 error_log="/var/log/slx.log"
-respawn_delay=5
+# 退避 30 秒，与应用内退避一致；之前是 5 秒（网络抖动时疯狂重启）。
+respawn_delay=30
 respawn_max=0
 depend() { need net; }
 EOF

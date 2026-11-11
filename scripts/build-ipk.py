@@ -74,6 +74,45 @@ slx_get() {
 	uci -q get slx.main."$1" 2>/dev/null
 }
 
+# 数值型配置项：只接受纯数字。
+#
+# 为什么必须校验：yaml.v3 遇到 `relay_channel_failures: 8s` 这类值会报
+# "cannot unmarshal !!str into int"，config.go 直接返回错误 → run 退出
+# → procd 一小时只重启 5 次就放弃 → **网关彻底起不来且不会自动恢复**。
+#
+# 行为：非法值**明确报错并跳过该项**（不生成非法 YAML，也不让整个网关起不来）。
+slx_num() {
+	_v="$(slx_get "$1")"
+	if [ -z "$_v" ]; then
+		[ -n "$2" ] && echo "$2"
+		return 0
+	fi
+	case "$_v" in
+		*[!0-9]*)
+			echo "slx: 配置项 $1 必须是纯数字（当前 '$_v'），已忽略该项" >&2
+			logger -t slx "配置项 $1 的值 '$_v' 不是合法数字，已忽略"
+			return 0
+			;;
+	esac
+	echo "$_v"
+}
+
+# 列表型配置项：UCI 里是空格分隔，YAML 里要写成列表。
+# 输出形如 "a","b"（不含外层方括号）。
+slx_list() {
+	_v="$(slx_get "$1")"
+	[ -z "$_v" ] && return 0
+	printf '%s\n' "$_v" | tr ' ' '\n' | grep -v '^$' | sed 's/.*/"&"/' | paste -sd, -
+}
+
+# 布尔型配置项：1/true → true；0/false → false；其它（含未设置）→ 不输出。
+slx_bool() {
+	case "$(slx_get "$1")" in
+		1|true|yes|on) echo "true" ;;
+		0|false|no|off) echo "false" ;;
+	esac
+}
+
 # 把 UCI 配置翻译成 slx 读的 YAML。
 # 为什么不直接让 slx 读 UCI：slx 要能在非 OpenWrt 平台上跑，
 # 不能为了这一个平台引入 uci 依赖。翻译放在 init 脚本里，代价最小。
@@ -103,13 +142,13 @@ gen_yaml() {
 		rt="$(slx_get relay_transport)"
 		[ -n "$rt" ] && echo "relay_transport: \"$rt\""
 
-		rp="$(slx_get relay_tls_port)"
+		rp="$(slx_num relay_tls_port)"
 		[ -n "$rp" ] && echo "relay_tls_port: $rp"
 
 		rl="$(slx_get relay_tls_listen)"
 		[ -n "$rl" ] && echo "relay_tls_listen: \"$rl\""
 
-		rc="$(slx_get relay_tls_conns)"
+		rc="$(slx_num relay_tls_conns)"
 		[ -n "$rc" ] && echo "relay_tls_conns: $rc"
 
 		# pin 属于凭据类信息：YAML 权限已是 0600，但不要打到日志或状态页。
@@ -122,10 +161,78 @@ gen_yaml() {
 		rsk="$(slx_get relay_clock_skew)"
 		[ -n "$rsk" ] && echo "relay_clock_skew: \"$rsk\""
 
-		case "$(slx_get dispatch)" in
-			1) echo "dispatch: true" ;;
-			0) echo "dispatch: false" ;;
-		esac
+		# 分流开关：只有明确为 1/true 才开。
+		# **删掉这个键 = 关闭**（以前只处理 1/0，写成 2 或删掉都不输出，
+		# 而 config.go 默认 true ⇒ 「删键」反而把分流打开了）。
+		_b="$(slx_bool dispatch)"
+		# 没配就是**关闭**（删键即关闭）。
+		[ -z "$_b" ] && _b=false
+		echo "dispatch: $_b"
+
+		# —— 下面这些以前没有翻译，配了不生效且没有任何提示 ——
+		# dispatch_ifaces 最关键：分流接口只能自动识别，
+		# 多网桥/旁路由场景挑错接口 ⇒ 真实流量不被标记 ⇒ 境外直连泄露。
+
+		_di="$(slx_list dispatch_ifaces)"
+		[ -n "$_di" ] && echo "dispatch_ifaces: [$_di]"
+
+		_lf="$(slx_get log_format)"
+		[ -n "$_lf" ] && echo "log_format: \"$_lf\""
+
+		_pp="$(slx_bool slx_pprof)"
+		[ -n "$_pp" ] && echo "slx_pprof: $_pp"
+
+		_rtc="$(slx_get relay_tls_cert)"
+		[ -n "$_rtc" ] && echo "relay_tls_cert: \"$_rtc\""
+
+		_ct="$(slx_get relay_tls_connect_timeout)"
+		[ -n "$_ct" ] && echo "relay_tls_connect_timeout: \"$_ct\""
+
+		_rcd="$(slx_num relay_cert_days)"
+		[ -n "$_rcd" ] && echo "relay_cert_days: $_rcd"
+
+		_cnl="$(slx_get cn_list_url)"
+		[ -n "$_cnl" ] && echo "cn_list_url: \"$_cnl\""
+
+		_cnls="$(slx_list cn_list_urls)"
+		[ -n "$_cnls" ] && echo "cn_list_urls: [$_cnls]"
+
+		_ic="$(slx_get inner_cidr)"
+		[ -n "$_ic" ] && echo "inner_cidr: \"$_ic\""
+
+		_tn="$(slx_get tun_name)"
+		[ -n "$_tn" ] && echo "tun_name: \"$_tn\""
+
+		_la="$(slx_get listen_addr)"
+		[ -n "$_la" ] && echo "listen_addr: \"$_la\""
+
+		_lp="$(slx_num listen_port)"
+		[ -n "$_lp" ] && echo "listen_port: $_lp"
+
+		_cp="$(slx_num ctrl_port)"
+		[ -n "$_cp" ] && echo "ctrl_port: $_cp"
+
+		_pb="$(slx_num probe_bytes)"
+		[ -n "$_pb" ] && echo "probe_bytes: $_pb"
+
+		_ec="$(slx_num egress_capacity)"
+		[ -n "$_ec" ] && echo "egress_capacity: $_ec"
+
+		_pa="$(slx_get public_addr)"
+		[ -n "$_pa" ] && echo "public_addr: \"$_pa\""
+
+		_pt="$(slx_list probe_targets)"
+		[ -n "$_pt" ] && echo "probe_targets: [$_pt]"
+
+		# 探测周期与阈值（数值项要走校验）
+		_rpi="$(slx_get relay_tls_probe_interval)"
+		[ -n "$_rpi" ] && echo "relay_tls_probe_interval: \"$_rpi\""
+
+		_rpt="$(slx_get relay_probe_timeout)"
+		[ -n "$_rpt" ] && echo "relay_probe_timeout: \"$_rpt\""
+
+		_rcf="$(slx_num relay_channel_failures)"
+		[ -n "$_rcf" ] && echo "relay_channel_failures: $_rcf"
 	} > "$YAML"
 	chmod 600 "$YAML"
 }
