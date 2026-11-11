@@ -38,6 +38,14 @@ type dispatchState struct {
 	refresh chan struct{}
 	// lastProblemCount 用于抑制重复告警。
 	lastProblemCount int
+
+	// forwardPresent 记录「启动时哪些 FORWARD 放行规则本来就在」。
+	//
+	// 用途：看门狗只补回**本来就有**的规则，不新增本来就没有的 ——
+	// 于是不需要知道当前是 packet 模式还是 proxy 模式，
+	// 也不会顺手把内网网卡之间的转发也放行（那是安全策略的变化，
+	// 不该由看门狗顺手做）。
+	forwardPresent map[string]map[bool]bool
 }
 
 // setupDispatch 准备分流：取国内网段数据，算出要做分流的接口。
@@ -137,11 +145,75 @@ func setupDispatch(ctx context.Context, log *slog.Logger, c *config.Config, env 
 		}
 	}
 
+	sys := netcfg.NewSystem(nil)
+
+	// 快照「启动时哪些 FORWARD 放行规则在位」。
+	//
+	// 为什么要快照：OpenWrt 的防火墙一重载（fw3 reload / UCI 提交 /
+	// 装新服务）就会把整张规则表清空重建，我们插进去的 FORWARD 放行规则
+	// 随之消失 —— 而 ipset、mangle 打标、ip rule、路由表都还在
+	// ⇒ **状态页显示一切正常，但境外流量永久断**（审计报告根因 M）。
+	//
+	// 快照之后，看门狗只补回「本来就有」的那些，不多也不少。
+	forwardPresent := map[string]map[bool]bool{}
+	snapshotForward(sys, forwardPresent, tunDev)
+	for _, iface := range ifaces {
+		snapshotForward(sys, forwardPresent, iface)
+	}
+
 	return &dispatchState{
-		sys: netcfg.NewSystem(nil),
-		spc: spc,
-		cn:  res,
+		sys:            sys,
+		spc:            spc,
+		cn:             res,
+		forwardPresent: forwardPresent,
 	}, nil
+}
+
+// snapshotForward 记录某个网卡的 FORWARD 放行规则当前是否存在。
+func snapshotForward(sys *netcfg.System, into map[string]map[bool]bool, iface string) {
+	if iface == "" {
+		return
+	}
+	m := map[bool]bool{}
+	for _, outgoing := range []bool{false, true} {
+		m[outgoing] = sys.HasForwardAccept(iface, outgoing)
+	}
+	into[iface] = m
+}
+
+// ensureForwardRules 补回被防火墙重载冲掉的 FORWARD 放行规则。
+//
+// **只补「本来就有」的**（见 dispatchState.forwardPresent 的说明）：
+// 启动时装过的会被补回，没装过的不会被顺手放行。
+//
+// 这是「状态全绿但网络全断」这个隐藏地雷的解药：
+// 以前 FORWARD 规则只在启动时装一次，防火墙一重载就没了，
+// 而看门狗只管 ipset/mangle/ip rule ⇒ 永远补不回来。
+func (d *dispatchState) ensureForwardRules(log *slog.Logger) {
+	if d == nil || d.sys == nil {
+		return
+	}
+	for iface, present := range d.forwardPresent {
+		for _, outgoing := range []bool{false, true} {
+			if !present[outgoing] {
+				continue
+			}
+			if d.sys.HasForwardAccept(iface, outgoing) {
+				continue
+			}
+			if _, err := d.sys.EnsureForwardAccept(iface, outgoing); err != nil {
+				log.Warn("补装 FORWARD 放行规则失败",
+					logx.FieldEvent, "dispatch.forward_heal_failed",
+					logx.FieldErr, err.Error(),
+					logx.FieldHint, "常见原因是防火墙重载后规则未补回；这会让状态页全绿但境外流量不通")
+				continue
+			}
+			log.Info("已补回被防火墙重载清掉的 FORWARD 放行规则",
+				logx.FieldEvent, "dispatch.forward_healed",
+				"iface", iface,
+				"outgoing", outgoing)
+		}
+	}
 }
 
 // watch 是分流看门狗。
@@ -171,6 +243,10 @@ func (d *dispatchState) watch(ctx context.Context, log *slog.Logger, ready func(
 
 	for {
 		d.evaluate(log, ready())
+		// FORWARD 放行规则不在 dispatch 的 Verify 检查项里
+		// （它们装在 filter 表，与 ipset/mangle 无关），
+		// 所以这里单独补一次 —— 被防火墙重载冲掉时立即恢复。
+		d.ensureForwardRules(log)
 
 		select {
 		case <-ctx.Done():
