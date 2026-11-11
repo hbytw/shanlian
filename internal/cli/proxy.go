@@ -445,11 +445,14 @@ func (p *proxyPlane) Run(ctx context.Context) error {
 				// ICMP echo 必须自己接管：gvisor 只终结 TCP/UDP，
 				// 不处理就会导致 proxy 模式下 ping 完全不通，
 				// 用户会误以为整个网络挂了。
+				//
+				// tryICMPEcho 内部会自己拷贝一份（它要起 goroutine 等 agent），
+				// 所以这里传原始 buf 是安全的。
 				if p.tryICMPEcho(buf[:n]) {
 					p.tunRead.Add(1)
 					continue
 				}
-				if p.stack.PushPacket(buf[:n]) {
+				if pushTUNPacket(p.stack, buf, n) {
 					p.tunRead.Add(1)
 				}
 			}
@@ -473,6 +476,41 @@ func (p *proxyPlane) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	return nil
+}
+
+// tunPacketSink 是「把一个 IP 包交给协议栈」的接口。
+//
+// 抽成接口只有一个目的：**能写测试**。
+// 真实实现是 *netstack.Stack；测试需要一个「假装异步使用」的替身
+// 来复现数据竞争（见 proxybuf_test.go）。
+type tunPacketSink interface {
+	PushPacket(pkt []byte) bool
+}
+
+// pushTUNPacket 把从 TUN 读到的包交给协议栈。
+//
+// # **必须拷贝**
+//
+// TUN 读循环复用同一个 buf，而协议栈是**异步**处理包的：
+//
+//   - TCP：gvisor 的 forwarder 是 `go f.handler(...)`，
+//     handler 协程里才做 CreateEndpoint（要读 SYN 里的 TCP 选项）；
+//   - UDP：端点把包收进接收队列，之后才由中继协程读它的载荷。
+//
+// ⇒ 不拷贝的话，协议栈可能读到**已经被下一个包覆盖**的字节：
+// 数据竞争（-race 会报），线上表现为偶发的包错乱 / 校验和错误。
+//
+// 注意 netstack.PushPacket 里的 buffer.MakeWithData(pkt) **不拷贝**，
+// 它只是引用调用方的字节。
+func pushTUNPacket(sink tunPacketSink, buf []byte, n int) bool {
+	return sink.PushPacket(copyTunPacket(buf[:n]))
+}
+
+// copyTunPacket 复制一份从 TUN 读到的 IP 包。
+func copyTunPacket(src []byte) []byte {
+	pkt := make([]byte, len(src))
+	copy(pkt, src)
+	return pkt
 }
 
 // HasEgress 报告当前是否有可用出口（供分流看门狗判断是否接管流量）。
