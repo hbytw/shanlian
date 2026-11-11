@@ -1,0 +1,22 @@
+# 默认按文本处理，仓库内统一 LF ✅✅
+# 原因：Windows 端 checkout 会把 LF 转成 CRLF ✅⚠️
+#       Linux 端（路由器、CI）拿到 CRLF 会导致 shell 脚本失败 ✅⚠️
+* text=auto eol=lf
+
+# 二进制文件 ✅✅
+*.xdb binary
+*.png binary
+*.jpg binary
+*.gz binary
+*.tgz binary
+*.ipk binary
+*.exe binary
+
+# 明确指定 ✅✅
+*.go text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.conf text eol=lf
