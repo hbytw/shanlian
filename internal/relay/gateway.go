@@ -499,6 +499,10 @@ func (g *Gateway) Close() {
 // Session 返回某个 agent 的会话（加锁读）。
 //
 // 给测试与内部调用用：直接读 g.agents 会与写入产生数据竞争。
+//
+// ★ agent 不存在时返回 nil ✅✅ —— 调用方必须判空 ✅⚠️
+//   （2026-11-11 CI 上真实崩过一次：测试里直接 .tlsChannels() ⇒ nil 解引用 ✅⚠️）
+//   想要"没有就当没有通道"的语义，请用测试辅助里的 agentSessionOf ✅✅。
 func (g *Gateway) Session(nodeID string) *agentSession {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
