@@ -292,6 +292,7 @@ func collectProxyStatus(
 			Primary: ci.Primary,
 			Open:    ci.Open,
 			Since:   ci.Since,
+			Streams: ci.Streams,
 		})
 	}
 	if pp.dns != nil {

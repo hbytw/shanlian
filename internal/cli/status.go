@@ -123,6 +123,8 @@ type ChannelSummary struct {
 	Open bool `json:"open"`
 	// Since 是这条通道建立的时间。
 	Since string `json:"since,omitempty"`
+	// Streams 是这条通道当前打开的 yamux 流数（开流卡住的前兆指标）。
+	Streams int `json:"streams"`
 }
 
 // AgentDetail 是单台出口的实时指标。

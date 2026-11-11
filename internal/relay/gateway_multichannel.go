@@ -918,6 +918,12 @@ type ChannelInfo struct {
 	Primary bool    `json:"primary"`
 	Open    bool    `json:"open"`
 	Since   string  `json:"since"`
+	// Streams 是这条通道当前打开的 yamux 流数。
+	//
+	// 为什么要暴露它：yamux 的 synCh 只有 256 个槽位，而开流拿槽位时
+	// 没有超时（对端不确认就永久阻塞）。流数异常膨胀 ⇒
+	// 说明有开流卡住没回收 ⇒ 这正是「数据面永久卡死」的前兆。
+	Streams int `json:"streams"`
 }
 
 // ChannelInfos 返回所有 agent 的通道状态。
@@ -935,6 +941,10 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 		primary := s.Primary()
 		for _, c := range s.channels() {
 			open, _ := c.breaker.state()
+			streams := 0
+			if c.sess != nil {
+				streams = c.sess.NumStreams()
+			}
 			out = append(out, ChannelInfo{
 				NodeID:  s.nodeID,
 				Kind:    c.Name(),
@@ -943,6 +953,7 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 				Primary: primary == c,
 				Open:    open,
 				Since:   c.since.Format(time.RFC3339),
+				Streams: streams,
 			})
 		}
 	}
@@ -964,25 +975,69 @@ func (s *agentSession) Primary() *channel {
 // 客户端 20 秒超时 = 全屋断网（现场事故）。
 const streamOpenTimeout = 5 * time.Second
 
+// openStreamSem 是**在途开流**的全局信号量（信号量满了就快速失败）。
+//
+// # 为什么必须有这个上限
+//
+// yamux 的 OpenStream 在拿 SYN 槽位时**没有超时**（yamux session.go:169-174：
+// `s.synCh <- struct{}{}` 只在会话关闭时才解除），对端不 ACK 就永久阻塞。
+// 而 synCh 一共只有 256 个槽位（每会话）。
+//
+// ⇒ 一次开流超时若把 goroutine 丢在那儿，槽位就被**永久**占住；
+//   攒够 256 次，这个会话的所有新开流永久阻塞 ⇒ 该通道彻底死掉。
+//   （审计报告「根因 C」：可能演变成整台网关数据面永久死亡。）
+//
+// ⇒ 所以在途开流数必须有硬上限：超了直接快速失败，**不再排队**
+//   （排队等于把超时往后推，而超时的根因是会话本身有问题）。
+//   上限取 128：远小于 256 ⇒ 永远吃不满 synCh ⇒ 不会锁死。
+var openStreamSem = make(chan struct{}, 128)
+
 // openStreamWithTimeout 开一条复用流，带超时。
 //
-// 超时后那个 goroutine 会继续卡在 yamux 内部（直到会话关闭才退出），
-// 但它**不会**再拖住调用方 —— 这正是我们要的：宁可放弃这次请求，
-// 也不能让请求方无限期等待。
+// 三条保证：
+//
+//  1. 超时后调用方立刻返回，不被拖住；
+//  2. 卡在 yamux 里的那个 goroutine **有界**：在途开流总数受
+//     openStreamSem 限制，卡住的开流数量因此有界，通道重建或
+//     会话关闭时自然释放；
+//  3. 迟到的 stream 会被回收（下面的 janitor 关掉它），
+//     不在对端留下永远不关的流条目。
 func openStreamWithTimeout(sess *yamux.Session, timeout time.Duration) (*yamux.Stream, error) {
+	if sess == nil {
+		return nil, errors.New("relay: 会话为空")
+	}
+	// 在途开流数超限 ⇒ 快速失败（不排队）。
+	// 在途开流数超限 ⇒ 快速失败（不排队）。
+	select {
+	case openStreamSem <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("relay: 在途开流已达上限（%d），拒绝新开流", cap(openStreamSem))
+	}
 	type res struct {
 		conn *yamux.Stream
 		err  error
 	}
 	ch := make(chan res, 1)
 	go func() {
+		defer func() { <-openStreamSem }()
 		c, err := sess.OpenStream()
 		ch <- res{c, err}
 	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
 		return r.conn, r.err
-	case <-time.After(timeout):
+	case <-timer.C:
+		// 超时：调用方不等了，但那个 goroutine 还在 yamux 里等 ACK。
+		// 起一个回收协程：等它拿到 stream 就立刻关掉，
+		// 否则会在对端留下一条永远不关的流（占对端资源、也占窗口）。
+		go func() {
+			r := <-ch
+			if r.conn != nil {
+				_ = r.conn.Close()
+			}
+		}()
 		return nil, fmt.Errorf("relay: 打开复用流超时（%s）", timeout)
 	}
 }
