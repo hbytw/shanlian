@@ -662,6 +662,15 @@ func hostPingOnChannel(conn net.Conn, ip net.IP, timeout time.Duration) (bool, e
 	return resp.Alive, nil
 }
 
+// dnsOpenSem 是**DNS 解析开流**的并发上限。
+//
+// 与业务流的开流分开计数：DNS 是短平快的请求，但并发可以很高
+// （dnsfwd 允许 512 个查询同时在飞），不设上限的话它会在开流阶段
+// 把 yamux 的槽位吃光，业务连接随后全部排队超时。
+//
+// 超限时快速失败，dnsfwd 随即回落到本地解析。
+var dnsOpenSem = make(chan struct{}, 32)
+
 // Resolve 请求指定 agent 用它那边的 DNS 解析域名。
 //
 // 返回的 IP 是「贴着出口位置」的结果，用于 CDN 就近与域名↔出口亲和。
@@ -697,17 +706,57 @@ func (g *Gateway) Resolve(nodeID, domain string, timeout time.Duration) ([]net.I
 	// 直连通道出问题，绝不能连带把兜底通道也拖下水。
 	cands := s.candidatesFor(domain, time.Now(), g.transportMode())
 	if len(cands) == 0 {
-		return nil, ErrNoAgent
+		// agent 在线，但没有一条可用通道（都被通道级熔断打开了）。
+		return nil, ErrNoUsableChannel
 	}
+
+	// **DNS 解析的开流有独立上限**。
+	//
+	// dnsfwd 允许 512 个查询并发，而 yamux 每个会话的 synCh 只有 256 个槽位
+	// ⇒ DNS 完全可以在「开流」这一阶段把业务流的位置吃光，
+	// 业务连接随后全部排队超时（审计报告「根因 B」的连带问题）。
+	//
+	// 超限时**快速失败**：dnsfwd 会回落到本地解析
+	//（internal/dnsfwd/dnsfwd.go:346），宁可给一个本地解析结果，
+	// 也不能让 DNS 把整条数据面堵住。
+	select {
+	case dnsOpenSem <- struct{}{}:
+		defer func() { <-dnsOpenSem }()
+	default:
+		return nil, fmt.Errorf("relay: DNS 开流并发已达上限（%d），回落到本地解析", cap(dnsOpenSem))
+	}
+
+	// 总预算：调用方给多少，整个解析（含开流）就用多少。
+	//
+	// 之前开流用的是固定的 streamOpenTimeout（5 秒），
+	// 而 DNS 路径的客户端预算只有 2 秒 ⇒ 实际最坏 7 秒，
+	// 客户端 DNS 等 7 秒 ⇒ 后续请求全排队 ⇒「一个请求慢，全家都慢」。
+	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for _, c := range cands {
-		conn, err := openStreamWithTimeout(c.sess, streamOpenTimeout)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			lastErr = fmt.Errorf("relay: 解析预算已用尽（%s）", timeout)
+			break
+		}
+		openBudget := remaining
+		if openBudget > streamOpenTimeout {
+			openBudget = streamOpenTimeout
+		}
+		conn, err := openStreamWithTimeout(c.sess, openBudget)
 		if err != nil {
 			lastErr = err
 			// **这里不记通道熔断计数**（见下面的说明）。
 			continue
 		}
-		ips, err := resolveOnChannel(conn, domain, timeout)
+		// 开流花掉的时间要从总预算里扣：解析本身只能用剩下的。
+		rest := time.Until(deadline)
+		if rest <= 0 {
+			_ = conn.Close()
+			lastErr = fmt.Errorf("relay: 解析预算已用尽（%s）", timeout)
+			break
+		}
+		ips, err := resolveOnChannel(conn, domain, rest)
 		_ = conn.Close()
 		if err == nil {
 			return ips, nil

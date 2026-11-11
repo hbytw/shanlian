@@ -34,6 +34,9 @@ type fakeAgent struct {
 	// failResolve 为 true 时，解析请求返回失败（模拟出口 DNS 坏了）。
 	failResolve atomic.Bool
 
+	// hangResolve 为 true 时，解析请求收下但不答复（模拟出口不响应）。
+	hangResolve atomic.Bool
+
 	// closeProbeAfter：回满这么多个 pong 后就关掉这条探测流
 	// （模拟对端把探测流关了 —— 现场症状的来源）。0 = 不关。
 	closeProbeAfter atomic.Int32
@@ -139,6 +142,11 @@ func (a *fakeAgent) handleStream(s *yamux.Stream) {
 		req, err := stream.DecodeResolveReq(payload)
 		if err != nil {
 			return
+		}
+		if a.hangResolve.Load() {
+			// 模拟「出口那边不回解析结果」：请求收到了，就是不答复。
+			// 用来验证网关侧的**总预算**（开流 + 解析）不会超出调用方给的时限。
+			select {}
 		}
 		if a.failResolve.Load() {
 			// 模拟「出口那边解析不了」：业务失败，不是链路坏了。
