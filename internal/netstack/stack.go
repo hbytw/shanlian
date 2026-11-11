@@ -39,7 +39,6 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 
 	"slx/internal/logx"
-	"slx/internal/stream"
 )
 
 // nicID 是 gvisor 里唯一网卡的编号（gvisor 要求从 1 开始）。
@@ -88,10 +87,26 @@ type Stack struct {
 
 	closed atomic.Bool
 	wg     sync.WaitGroup
+	// udpWg 统计 UDP 四元组的建连+中继 goroutine。
+	//
+	// 单独一个 WaitGroup：UDP 的建连可能卡在出口上（最长十几秒），
+	// 退出不能被它无限期拖住 ⇒ Close 里只等一个上限。
+	udpWg sync.WaitGroup
+
+	// udpMu / udpFlows 是 UDP 四元组表。
+	//
+	// 为什么要自己维护一张表：gvisor 的 demux 只知道「有没有端点」，
+	// 不知道「这个四元组刚才建连失败过、正在冷却」。
+	// 没有这张表的话，同一个四元组的每个包都会重新触发一次建连
+	// （= 按包放大，审计报告「根因 A」连带问题 B2）。
+	udpMu    sync.Mutex
+	udpFlows map[udpFlowKey]*udpFlow
 
 	tcpAccepted atomic.Int64
 	tcpFailed   atomic.Int64
 	udpAccepted atomic.Int64
+	udpFail     atomic.Int64
+	udpDropped  atomic.Int64
 }
 
 // Stats 是协议栈计数快照。
@@ -99,6 +114,10 @@ type Stats struct {
 	TCPAccepted int64
 	TCPFailed   int64
 	UDPAccepted int64
+	// UDPFailed 是 UDP 建连失败次数（出口连不上 / 端点建不起来）。
+	UDPFailed int64
+	// UDPDropped 是因为「四元组已知且正在冷却」而被丢掉的 UDP 包数。
+	UDPDropped int64
 }
 
 // New 创建协议栈。
@@ -114,7 +133,7 @@ func New(o Options) (*Stack, error) {
 		o.Connector = discardConnector{}
 	}
 
-	s := &Stack{connector: o.Connector, log: o.Log}
+	s := &Stack{connector: o.Connector, log: o.Log, udpFlows: make(map[udpFlowKey]*udpFlow)}
 
 	stk := stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{
@@ -213,6 +232,8 @@ func (s *Stack) Stats() Stats {
 		TCPAccepted: s.tcpAccepted.Load(),
 		TCPFailed:   s.tcpFailed.Load(),
 		UDPAccepted: s.udpAccepted.Load(),
+		UDPFailed:   s.udpFail.Load(),
+		UDPDropped:  s.udpDropped.Load(),
 	}
 }
 
@@ -221,8 +242,12 @@ func (s *Stack) Close() {
 	if s.closed.Swap(true) {
 		return
 	}
+	// 先关掉全部 UDP 四元组：不关的话，中继 goroutine 会一直挂在
+	// FramedPipe 的读上，下面的 wg.Wait() 永远等不到它们 ⇒ 退出卡住。
+	s.closeAllUDPFlows()
 	s.stk.Destroy()
 	s.wg.Wait()
+	s.waitUDPFlows(udpCloseWait)
 }
 
 // handleTCP 处理一个进入的 TCP 连接。
@@ -268,37 +293,15 @@ func (s *Stack) handleTCP(req *tcp.ForwarderRequest) {
 }
 
 // handleUDP 处理一个进入的 UDP 四元组。
+//
+// 实现在 udp.go —— 它必须与 TCP 的处理彻底分开：
+// gvisor 的 UDP forwarder 是**同步回调**
+// （pkg/tcpip/transport/udp/forwarder.go:47 直接调 f.handler(...)），
+// 而 TCP forwarder 是 `go f.handler(...)`（异步）。
+// ⇒ 这里任何阻塞都会占着 TUN 读协程 ⇒ 整个数据面停摆
+// （审计报告「根因 A」：并发 5 个请求全超时、串行单请求正好一个 RTT）。
 func (s *Stack) handleUDP(req *udp.ForwarderRequest) {
-	id := req.ID()
-	port := id.LocalPort
-	addr := net.IP(id.LocalAddress.AsSlice())
-
-	conn, _, err := s.connector.ConnectUDP(addr, port)
-	if err != nil {
-		s.log.Debug("UDP 建连失败",
-			logx.FieldEvent, "netstack.udp_failed",
-			logx.FieldTarget, addr.String(), "port", port,
-			logx.FieldErr, err.Error())
-		return // UDP 没有 RST 语义，静默丢弃
-	}
-
-	var wq waiter.Queue
-	udpEp, udpErr := req.CreateEndpoint(&wq)
-	if udpErr != nil {
-		_ = conn.Close()
-		return
-	}
-	s.udpAccepted.Add(1)
-
-	local := gonet.NewUDPConn(&wq, udpEp)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		// 必须用 stream.FramedPipe：它是网关与 agent 共用的帧格式实现。
-		// 曾经这里自己写了一套 4 字节长度头，而 agent 侧用的是 stream 包的
-		// 6 字节帧头（类型+错误码+长度），两端格式不一致导致 UDP 永远超时。
-		_ = stream.FramedPipe(conn, local, stream.ClassifyNetError)
-	}()
+	s.handleUDPFlow(req)
 }
 
 // relayBoth 在本地 gvisor 连接与出口中继流之间双向拷贝。
