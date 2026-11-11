@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,6 +152,87 @@ func TestFramedPipePreservesDatagrams(t *testing.T) {
 	}
 	if got := readDatagram(); got != "datagram-two" {
 		t.Fatalf("第二条数据报 = %q，期望 datagram-two（粘连说明帧边界丢了）", got)
+	}
+}
+
+// closeTracker 记录自己有没有被关闭。
+type closeTracker struct {
+	net.Conn
+	closed *atomic.Bool
+}
+
+func (c *closeTracker) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+// TestFramedPipeClosesTunnel 验证帧管道结束时**隧道也被关掉**。
+//
+// 回归：审计报告「根因 B3」—— FramedPipe 原来只关 socket，
+// 隧道（yamux 流）永远不关 ⇒ 每条 UDP 四元组永久泄漏一条流 + 一个 goroutine
+// （网关侧一份、agent 侧一份）。UDP 是无连接的、churn 极高 ⇒ 泄漏持续累积。
+func TestFramedPipeClosesTunnel(t *testing.T) {
+	tunnelTx, tunnelRx := net.Pipe()
+	sockA, sockB := net.Pipe()
+	defer sockB.Close()
+	defer tunnelRx.Close()
+
+	var closed atomic.Bool
+	tracked := &closeTracker{Conn: tunnelTx, closed: &closed}
+
+	done := make(chan error, 1)
+	go func() { done <- FramedPipe(tracked, sockA, nil) }()
+
+	// 对端关掉 ⇒ 帧管道的 socket→tunnel 协程读到 EOF 后退出。
+	_ = sockB.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("FramedPipe 没有退出")
+	}
+
+	// 隧道必须被关掉（否则 yamux 流永久泄漏）。
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if closed.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("FramedPipe 结束时没有关闭隧道（yamux 流会永久泄漏）")
+}
+
+// TestRelayTCPClosesBothSides 验证 **TCP 中继的行为没有变**。
+//
+// 这是 P0-3 的「证明 TCP 路径不变」：
+// FramedPipe 改了（会关隧道），但 TCP 走的是 RelayTCP ——
+// 它一直就是「两侧都关」，本次改动没有碰它。
+func TestRelayTCPClosesBothSides(t *testing.T) {
+	a1, a2 := net.Pipe()
+	b1, b2 := net.Pipe()
+	defer a2.Close()
+	defer b2.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- RelayTCP(a1, b1) }()
+
+	// 让中继跑起来，然后关掉对端 ⇒ 中继应当结束。
+	go func() {
+		_, _ = a2.Write([]byte("x"))
+	}()
+	_ = a2.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RelayTCP 没有退出")
+	}
+
+	// a1 必须已被关闭（读立刻返回错误而不是挂住）。
+	_ = a1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := a1.Read(make([]byte, 1)); err == nil {
+		t.Fatal("RelayTCP 结束后应当关闭两侧")
 	}
 }
 

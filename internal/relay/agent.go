@@ -244,6 +244,14 @@ func (a *Agent) serve(ctx context.Context, sess *yamux.Session) error {
 
 // handleStream 处理一条流：读请求 → 连目标 → 回结果 → 中继。
 func (a *Agent) handleStream(s *yamux.Stream) {
+	// 流结束时必须关掉它。
+	//
+	// 之前只有**错误分支**才关：正常中继结束（TCP/UDP 都跑完）之后，
+	// 这条 yamux 流一直开着 ⇒ 每条连接都占着一条流条目 + 一个 goroutine
+	// （审计报告「根因 B3」）。yamux 的 Close 是幂等的，重复调用无害，
+	// 所以这里统一用 defer 兜住所有路径。
+	defer s.Close()
+
 	defer func() {
 		if rec := recover(); rec != nil {
 			a.log.Error("处理中继流 panic", logx.Event("relay.stream_panic"), "detail", rec)
@@ -255,7 +263,6 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 	kind, payload, err := stream.ReadFrame(s)
 	if err != nil {
 		// 读不到握手说明网关侧已经放弃，直接关掉即可
-		_ = s.Close()
 		return
 	}
 
@@ -274,12 +281,10 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 	if kind == stream.KindResolveReq {
 		rreq, rerr := stream.DecodeResolveReq(payload)
 		if rerr != nil {
-			_ = s.Close()
 			return
 		}
 		resp := resolveOnAgent(rreq.Domain)
 		_ = stream.WriteResolveResp(s, resp)
-		_ = s.Close()
 		return
 	}
 
@@ -288,7 +293,6 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 	if kind == stream.KindHostPing {
 		preq, perr := stream.DecodeHostPing(payload)
 		if perr != nil {
-			_ = s.Close()
 			return
 		}
 		ip := net.ParseIP(preq.Addr)
@@ -298,16 +302,13 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 		}
 		_ = s.SetDeadline(time.Now().Add(5 * time.Second))
 		_ = stream.WriteHostPong(s, proto.HostPingResp{Alive: alive})
-		_ = s.Close()
 		return
 	}
 	if kind != stream.KindConnectReq {
-		_ = s.Close()
 		return
 	}
 	req, derr := stream.DecodeConnectReq(payload)
 	if derr != nil {
-		_ = s.Close()
 		return
 	}
 
@@ -336,7 +337,6 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 			resp.Reset = true
 		}
 		_ = stream.WriteConnectResp(s, resp)
-		_ = s.Close()
 		a.log.Debug("建连失败",
 			logx.Event("relay.connect_failed"),
 			"target", target, "network", network,
@@ -346,7 +346,6 @@ func (a *Agent) handleStream(s *yamux.Stream) {
 
 	if err := stream.WriteConnectResp(s, proto.ConnectResp{Established: true}); err != nil {
 		_ = targetConn.Close()
-		_ = s.Close()
 		return
 	}
 

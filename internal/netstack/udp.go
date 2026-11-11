@@ -35,7 +35,7 @@ import (
 // —— UDP 四元组的参数 ——
 
 const (
-	// udpIdleTimeout 是 UDP 四元组的空闲存活时间。
+	// defaultUDPIdleTimeout 是 UDP 四元组的默认空闲存活时间。
 	//
 	// UDP 没有「连接结束」这个概念：客户端可能再也不发包了，
 	// 但我们这边还占着一条 yamux 流 + 一个 goroutine + 一个 NAT 映射。
@@ -43,16 +43,16 @@ const (
 	//
 	// 45 秒的取舍：短到能挡住 NAT 表被撑爆，长到不会误杀
 	// 「安静但正常」的 UDP 会话（QUIC 之类的应用自己会发保活）。
-	udpIdleTimeout = 45 * time.Second
+	defaultUDPIdleTimeout = 45 * time.Second
+
+	// defaultUDPSweepInterval 是 UDP 四元组回收扫描的默认周期。
+	defaultUDPSweepInterval = 5 * time.Second
 
 	// udpFailCooldown 是 UDP 建连失败后的冷却时间。
 	//
 	// 失败时必须冷却：否则同一个四元组的**每一个包**都会重新触发一次
 	// 建连尝试，而每次尝试都可能阻塞好几秒（= 按包放大，审计报告「根因 B2」）。
 	udpFailCooldown = 10 * time.Second
-
-	// udpSweepInterval 是 UDP 四元组回收扫描的周期。
-	udpSweepInterval = 5 * time.Second
 
 	// maxUDPFlows 是同时存活的 UDP 四元组数量上限。
 	//
@@ -259,12 +259,43 @@ func (s *Stack) runUDPFlow(f *udpFlow, addr net.IP, port uint16) {
 	f.state.Store(int32(udpFlowActive))
 	s.udpAccepted.Add(1)
 
+	// 套一层「活动记录」：UDP 没有「连接结束」这个概念，
+	// 只能靠「多久没有数据流动」来判断这条流还值不值得留着
+	// （否则 NAT 映射与 yamux 流会长期被占着）。
+	//
+	// 注意：只记录**数据流动**，不记录「建连成功」——
+	// 建连成功但一个包都没通的流，几秒后就会被回收。
+	tunnel := &activityConn{Conn: conn, flow: f}
+	sock := &activityConn{Conn: local, flow: f}
+
 	// 必须用 stream.FramedPipe：它是网关与 agent 共用的帧格式实现。
 	// 曾经这里自己写了一套 4 字节长度头，而 agent 侧用的是 stream 包的
 	// 6 字节帧头（类型+错误码+长度），两端格式不一致导致 UDP 永远超时。
-	_ = stream.FramedPipe(conn, local, stream.ClassifyNetError)
+	_ = stream.FramedPipe(tunnel, sock, stream.ClassifyNetError)
 
 	s.finishUDPFlow(f)
+}
+
+// activityConn 在数据流动时给所属四元组打上「最近活跃」的时间戳。
+type activityConn struct {
+	net.Conn
+	flow *udpFlow
+}
+
+func (c *activityConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.flow.touch()
+	}
+	return n, err
+}
+
+func (c *activityConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 {
+		c.flow.touch()
+	}
+	return n, err
 }
 
 // failUDPFlow 标记建连失败并进入冷却。
@@ -317,6 +348,52 @@ func (s *Stack) pruneUDPFlowsLocked(now time.Time) {
 		if f.state.Load() == int32(udpFlowFailed) && nowNS > f.expireAt.Load() {
 			delete(s.udpFlows, k)
 		}
+	}
+}
+
+// sweepUDPFlows 周期回收空闲的 UDP 四元组。
+//
+// 它只做一件事：**关掉长时间没有数据流动的 UDP 流**。
+// 不重建通道、不重启服务、不碰任何系统状态 —— 纯粹是数据面自己的资源回收。
+func (s *Stack) sweepUDPFlows() {
+	t := time.NewTicker(s.udpSweepInterval())
+	defer t.Stop()
+	for {
+		select {
+		case <-s.udpStop:
+			return
+		case <-t.C:
+		}
+		s.reapIdleUDPFlows(time.Now())
+	}
+}
+
+// reapIdleUDPFlows 关闭空闲超时的 UDP 四元组（同时清掉过期��失败冷却记录）。
+func (s *Stack) reapIdleUDPFlows(now time.Time) {
+	cutoff := now.Add(-s.udpIdleTimeout()).UnixNano()
+	var idle []*udpFlow
+
+	s.udpMu.Lock()
+	for k, f := range s.udpFlows {
+		if f.state.Load() == int32(udpFlowFailed) {
+			// 失败冷却已过的记录直接摘掉（表不能无限长）。
+			if now.UnixNano() > f.expireAt.Load() {
+				delete(s.udpFlows, k)
+			}
+			continue
+		}
+		if f.lastActive.Load() < cutoff {
+			idle = append(idle, f)
+			delete(s.udpFlows, k)
+		}
+	}
+	s.udpMu.Unlock()
+
+	for _, f := range idle {
+		s.log.Debug("UDP 四元组空闲超时，回收",
+			logx.FieldEvent, "netstack.udp_idle_timeout",
+			"idle", s.udpIdleTimeout().String())
+		s.closeUDPFlow(f)
 	}
 }
 

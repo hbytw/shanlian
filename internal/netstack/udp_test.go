@@ -286,3 +286,65 @@ func TestUDPFlowSurvivesStackClose(t *testing.T) {
 		t.Fatal("协议栈关闭超时：UDP 中继 goroutine 泄漏了")
 	}
 }
+
+// TestUDPIdleFlowIsReaped 验证 **空闲超时的 UDP 四元组会被回收**。
+//
+// 回归：审计报告「根因 B3」—— UDP 四元组永久占着 yamux 流与 NAT 映射。
+// 现在靠「多久没有数据流动」来判断该关掉它。
+func TestUDPIdleFlowIsReaped(t *testing.T) {
+	conn := &udpTestConnector{}
+	proxy := newTestStack(t, conn)
+
+	pkt := buildUDPIPv4Packet(
+		net.IPv4(192, 168, 1, 100),
+		net.IPv4(8, 8, 8, 8),
+		5353, 53,
+		[]byte("dns-query"),
+	)
+	if !proxy.PushPacket(pkt) {
+		t.Fatal("协议栈应当接收这个 UDP 包")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 假装这条流已经很久没有数据流动。
+	proxy.udpMu.Lock()
+	for _, f := range proxy.udpFlows {
+		f.lastActive.Store(time.Now().Add(-time.Hour).UnixNano())
+	}
+	proxy.udpMu.Unlock()
+
+	proxy.reapIdleUDPFlows(time.Now())
+
+	proxy.udpMu.Lock()
+	n := len(proxy.udpFlows)
+	proxy.udpMu.Unlock()
+	if n != 0 {
+		t.Fatalf("空闲超时后还剩 %d 条 UDP 四元组记录，期望 0 条", n)
+	}
+}
+
+// TestUDPActiveFlowIsNotReaped 验证 **还在传数据的 UDP 四元组不会被误回收**。
+func TestUDPActiveFlowIsNotReaped(t *testing.T) {
+	conn := &udpTestConnector{}
+	proxy := newTestStack(t, conn)
+
+	pkt := buildUDPIPv4Packet(
+		net.IPv4(192, 168, 1, 100),
+		net.IPv4(8, 8, 8, 8),
+		5353, 53,
+		[]byte("dns-query"),
+	)
+	if !proxy.PushPacket(pkt) {
+		t.Fatal("协议栈应当接收这个 UDP 包")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	proxy.reapIdleUDPFlows(time.Now())
+
+	proxy.udpMu.Lock()
+	n := len(proxy.udpFlows)
+	proxy.udpMu.Unlock()
+	if n != 1 {
+		t.Fatalf("刚建好的 UDP 流被回收了（剩 %d 条，期望 1 条）", n)
+	}
+}

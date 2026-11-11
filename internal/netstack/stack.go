@@ -25,6 +25,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -76,6 +77,16 @@ type Options struct {
 	Connector Connector
 	// Log 日志。
 	Log *slog.Logger
+
+	// UDPIdleTimeout 是 UDP 四元组的空闲存活时间（0 = 默认 45 秒）。
+	//
+	// UDP 没有「连接结束」的概念，只能靠空闲超时回收：
+	// 不回收的话，每个四元组都会一直占着一条 yamux 流 + 一个 goroutine
+	// + 一个 NAT 映射（审计报告「根因 B3」）。
+	UDPIdleTimeout time.Duration
+
+	// UDPSweepInterval 是 UDP 四元组回收扫描周期（0 = 默认 5 秒）。
+	UDPSweepInterval time.Duration
 }
 
 // Stack 是网关侧的 gvisor 协议栈。
@@ -101,6 +112,13 @@ type Stack struct {
 	// （= 按包放大，审计报告「根因 A」连带问题 B2）。
 	udpMu    sync.Mutex
 	udpFlows map[udpFlowKey]*udpFlow
+
+	// udpIdle / udpSweep 是 UDP 四元组的回收参数。
+	udpIdle  time.Duration
+	udpSweep time.Duration
+	// udpStop 关闭空闲回收协程（Close 时关）。
+	udpStop     chan struct{}
+	udpStopOnce sync.Once
 
 	tcpAccepted atomic.Int64
 	tcpFailed   atomic.Int64
@@ -134,6 +152,17 @@ func New(o Options) (*Stack, error) {
 	}
 
 	s := &Stack{connector: o.Connector, log: o.Log, udpFlows: make(map[udpFlowKey]*udpFlow)}
+
+	// UDP 回收参数（0 = 用默认值）。
+	s.udpIdle = o.UDPIdleTimeout
+	if s.udpIdle <= 0 {
+		s.udpIdle = defaultUDPIdleTimeout
+	}
+	s.udpSweep = o.UDPSweepInterval
+	if s.udpSweep <= 0 {
+		s.udpSweep = defaultUDPSweepInterval
+	}
+	s.udpStop = make(chan struct{})
 
 	stk := stack.New(stack.Options{
 		NetworkProtocols: []stack.NetworkProtocolFactory{
@@ -181,8 +210,17 @@ func New(o Options) (*Stack, error) {
 	udpFwd := udp.NewForwarder(stk, s.handleUDP)
 	stk.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 
+	// 空闲回收协程：只关掉长时间没有数据流动的 UDP 流。
+	go s.sweepUDPFlows()
+
 	return s, nil
 }
+
+// udpIdleTimeout 返回 UDP 四元组的空闲存活时间。
+func (s *Stack) udpIdleTimeout() time.Duration { return s.udpIdle }
+
+// udpSweepInterval 返回 UDP 四元组回收扫描周期。
+func (s *Stack) udpSweepInterval() time.Duration { return s.udpSweep }
 
 // Endpoint 返回 channel 端点（供调用方取包写回 TUN）。
 func (s *Stack) Endpoint() *channel.Endpoint { return s.ep }
@@ -245,6 +283,8 @@ func (s *Stack) Close() {
 	// 先关掉全部 UDP 四元组：不关的话，中继 goroutine 会一直挂在
 	// FramedPipe 的读上，下面的 wg.Wait() 永远等不到它们 ⇒ 退出卡住。
 	s.closeAllUDPFlows()
+	// 停掉空闲回收协程。
+	s.udpStopOnce.Do(func() { close(s.udpStop) })
 	s.stk.Destroy()
 	s.wg.Wait()
 	s.waitUDPFlows(udpCloseWait)

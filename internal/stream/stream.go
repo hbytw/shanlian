@@ -189,6 +189,17 @@ const udpFrameHeaderLen = 6
 // 为什么不能直接 io.Copy：UDP 是数据报语义，字节流拼接会把两个数据报粘成一个，
 // 应用层解析直接错位。必须每条数据报独立成帧。
 //
+// # 结束时两侧都关
+//
+// 帧格式管道退出时会把 **socket 与隧道都关掉**：
+// 隧道不关的话，每条 UDP 四元组都会永久泄漏一条 yamux 流
+// （审计报告「根因 B3」）。隧道实现了 io.Closer 才关（两端实际都是 Closer）。
+//
+// # 只用于 UDP
+//
+// TCP 走的是 RelayTCP（字节流语义），**不经过本函数**
+// ⇒ 这里的改动不会影响 TCP 路径的行为。
+//
 // classifyErr 把本地 socket 错误翻译成线协议错误码（这样网关知道该不该回
 // ICMP port unreachable）；onRemoteErr 在收到对端错误帧时回调，用于让网关
 // 把错误投给对应的 UDP 端点。
@@ -258,6 +269,19 @@ func FramedPipe(
 
 	err := <-stop
 	_ = sock.Close()
+	// **必须把隧道也关掉。**
+	//
+	// 为什么：FramedPipe 原来只关 socket，隧道（yamux 流）永远不关
+	// ⇒ 每条 UDP 四元组永久泄漏一条 yamux 流 + 一个 goroutine
+	// （网关侧一份、agent 侧一份，审计报告「根因 B3」）。
+	// UDP 是无连接的、churn 极高 ⇒ 泄漏会持续累积。
+	//
+	// 为什么用类型断言：tunnel 的静态类型是 io.ReadWriter，
+	// 不保证实现了 io.Closer。实际上两端传进来的都是 Closer：
+	// 网关侧是 net.Conn（yamux 流），agent 侧是 *yamux.Stream。
+	if c, ok := tunnel.(io.Closer); ok {
+		_ = c.Close()
+	}
 	return err
 }
 
