@@ -30,6 +30,12 @@ const (
 	//
 	// 取 20 = 约 40 秒。太短会被抖动带偏，太长会掩盖正在恶化的链路。
 	proxLossWindow = 20
+	// l1ProbeConcurrency 是 L1 采样同时进行的最大数量。
+	//
+	// agent 数量是动态的（重连就多一个），不限流的话 goroutine 数
+	// 会跟着 agent 数一起涨（实测堆到过 4 万个）。
+	// 4 个足够把 6 台 agent 的探测压到两轮以内。
+	l1ProbeConcurrency = 4
 )
 
 // startProxyProbe 周期采样每个出口 agent 的 L1 链路质量并喂给选路器。
@@ -41,8 +47,13 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 	t := time.NewTicker(proxProbeInterval)
 	defer t.Stop()
 
-	windows := map[string][]bool{}
-	lastGood := map[string]float64{} // 最近一次成功采样的 RTT，失败时沿用它
+	// 采样窗口状态放在**自带锁**的结构体里。
+	//
+	// 之前是两个裸 map，而采样是并行的（每个 agent 一个 goroutine），
+	// 于是多个 goroutine 并发写同一个 map ⇒ 路由器上直接
+	// "fatal error: concurrent map writes" 崩过一次（2026-11-11 21:51）。
+	// 锁在结构体内部 ⇒ 这类错误从结构上不可能再犯。
+	win := newL1Windows()
 
 	for {
 		select {
@@ -53,27 +64,15 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 
 			// 带宽来自被动统计（真实中继流量的峰值），没有样本时传 0，
 			// 选路器会用 fallbackBWMbps 兜底，不会被当成「零带宽」惩罚。
+			// 清掉已断开 agent 的状态，避免内存随重连次数增长
+			alive := make(map[string]bool, len(ids))
+			for _, id := range ids {
+				alive[id] = true
+			}
 			if bw != nil {
-				alive := make(map[string]bool, len(ids))
-				for _, id := range ids {
-					alive[id] = true
-				}
 				bw.prune(alive)
 			}
-
-			// 清掉已断开 agent 的状态，避免内存随重连次数增长
-			if len(windows) > len(ids) {
-				alive := make(map[string]bool, len(ids))
-				for _, id := range ids {
-					alive[id] = true
-				}
-				for id := range windows {
-					if !alive[id] {
-						delete(windows, id)
-						delete(lastGood, id)
-					}
-				}
-			}
+			win.prune(alive)
 
 			// 各 agent **并行**探测。
 			//
@@ -82,11 +81,18 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 			// 于是实际探测周期被拉到十几秒，状态上的延迟/丢包全是旧账，
 			// 熔断判定也跟着滞后。
 			var wg sync.WaitGroup
+			// 并发上限：agent 数量是动态的（重连就多一个），
+			// 不限流的话 goroutine 数会跟着 agent 数一起涨
+			// （实测堆到过 4 万个）。4 个足够把 6 台 agent 的探测
+			// 压到两轮以内。
+			sem := make(chan struct{}, l1ProbeConcurrency)
 			for _, id := range ids {
 				wg.Add(1)
 				go func(id string) {
 					defer wg.Done()
-					probeL1Once(gw, sel, bw, log, id, now, windows, lastGood)
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					probeL1Once(gw, sel, bw, log, id, now, win)
 				}(id)
 			}
 			wg.Wait()
@@ -302,8 +308,7 @@ func probeErrPhrase(err error) string {
 // 形成级联（出口被踢 → DNS 失败 → 更多熔断）。
 // 所以这里直接跳过：不记丢包、不报告健康失败。
 func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
-	log *slog.Logger, id string, now time.Time,
-	windows map[string][]bool, lastGood map[string]float64) {
+	log *slog.Logger, id string, now time.Time, win *l1Windows) {
 
 	rtt, err := gw.Ping(id, proxProbeTimeout)
 	ok := err == nil
@@ -316,25 +321,8 @@ func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
 		return
 	}
 
-	w := append(windows[id], ok)
-	if len(w) > proxLossWindow {
-		w = w[len(w)-proxLossWindow:]
-	}
-	windows[id] = w
-
-	lost := 0
-	for _, v := range w {
-		if !v {
-			lost++
-		}
-	}
-	loss := float64(lost) / float64(len(w))
-
-	rttMS := lastGood[id]
-	if ok {
-		rttMS = float64(rtt.Microseconds()) / 1000.0
-		lastGood[id] = rttMS
-	}
+	// 采样窗口的读写在结构体内部加锁完成（并发安全）。
+	loss, rttMS := win.record(id, ok, rtt)
 	// 失败时不把 0 传给 UpdateL1 —— EWMA 会被瞬间拉低，
 	// 让一条刚抖一下的链路看起来「快到 0ms」，选路反而更偏爱它。
 	bwMbps := 0.0
@@ -354,5 +342,74 @@ func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
 			logx.FieldEvent, "probe.l1_failed",
 			logx.FieldNodeID, shortID(id),
 			logx.FieldErr, errStringSafe(err))
+	}
+}
+
+// l1Windows 记录每个 agent 的 L1 采样窗口（丢包率与最近一次成功的 RTT）。
+//
+// # 为什么锁在结构体里
+//
+// 采样是**并行**的（每个 agent 一个 goroutine 同时探测），
+// 而这几个 map 是所有 agent 共享的。之前这里是两个裸 map，
+// 探针 goroutine 并发写同一个 map ⇒ 路由器上直接
+//
+//	fatal error: concurrent map writes
+//
+// 崩过一次（2026-11-11 21:51，SLX 进程退出、全屋断网）。
+// 把状态和锁封在一个结构体里，这类错误从**结构上**不可能再犯：
+// 想写它就必须先拿它的锁。
+type l1Windows struct {
+	mu       sync.Mutex
+	windows  map[string][]bool
+	lastGood map[string]float64
+}
+
+func newL1Windows() *l1Windows {
+	return &l1Windows{
+		windows:  map[string][]bool{},
+		lastGood: map[string]float64{},
+	}
+}
+
+// record 记一次采样。
+//
+// 返回：丢包率（最近 proxLossWindow 次里的失败比例）、
+// 最近一次成功的 RTT（毫秒；失败时沿用上一次的，失败不传 0 ——
+// EWMA 被瞬间拉低会让一条刚抖一下的链路看起来「快到 0ms」）。
+func (w *l1Windows) record(id string, ok bool, rtt time.Duration) (loss float64, rttMS float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	samples := append(w.windows[id], ok)
+	if len(samples) > proxLossWindow {
+		samples = samples[len(samples)-proxLossWindow:]
+	}
+	w.windows[id] = samples
+
+	lost := 0
+	for _, v := range samples {
+		if !v {
+			lost++
+		}
+	}
+	loss = float64(lost) / float64(len(samples))
+
+	rttMS = w.lastGood[id]
+	if ok {
+		rttMS = float64(rtt.Microseconds()) / 1000.0
+		w.lastGood[id] = rttMS
+	}
+	return loss, rttMS
+}
+
+// prune 清理已经下线的 agent，避免状态随重连次数无限增长。
+func (w *l1Windows) prune(alive map[string]bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for id := range w.windows {
+		if !alive[id] {
+			delete(w.windows, id)
+			delete(w.lastGood, id)
+		}
 	}
 }
