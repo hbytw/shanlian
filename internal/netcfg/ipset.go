@@ -208,7 +208,8 @@ func (s *System) EnsureRuleInTable(table int, dst, dev string) (bool, error) {
 // ClearTable 清空一个自定义路由表。
 //
 // ⚠️ 整表 flush：会连带清掉别人往这张表里加的路由。
-//    撤自己的规则请用 RemoveTableRoute（只删自己那一条）。
+//
+//	撤自己的规则请用 RemoveTableRoute（只删自己那一条）。
 func (s *System) ClearTable(table int) {
 	_, _ = s.runCmd(s.IP, "route", "flush", "table", strconv.Itoa(table))
 }

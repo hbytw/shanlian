@@ -240,7 +240,7 @@ func (g *Gateway) transportMode() string {
 //
 // g.ln 由 Run() 写、由其它 goroutine（状态页、测试）读 ⇒ **必须加锁**。
 // 之前这里是无锁读，-race 直接报 DATA RACE
-//（读写都发生在 crypto/tls.Listen() 返回后的那一瞬间）。
+// （读写都发生在 crypto/tls.Listen() 返回后的那一瞬间）。
 func (g *Gateway) Addr() string {
 	g.mu.RLock()
 	ln := g.ln
