@@ -1,0 +1,126 @@
+name: CI
+
+# ★ 每次 push 都跑 ✅✅ —— SLX 改动直接影响全屋网络 ✅✅
+#   2026-11-11 的教训：P6 没跑 -race 就上生产 ⇒ concurrent map writes ⇒ SLX 崩 ⇒ 全屋断网 ✅⚠️
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  # ---------- 格式与静态检查 ✅✅ ----------
+  fmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: gofmt check
+        run: |
+          OUT=$(gofmt -l ./cmd ./internal)
+          if [ -n "$OUT" ]; then
+            echo "以下文件未格式化 ✅⚠️："
+            echo "$OUT"
+            exit 1
+          fi
+          echo "gofmt 干净 ✅✅"
+
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go vet
+        run: go vet ./...
+
+  # ---------- 测试 ✅✅ ----------
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test -count=1 ./...
+
+  # ★ 竞态检测是硬门槛 ✅✅
+  #   生产的 panic（concurrent map writes）和 relay 的 DATA RACE 都是它抓到的 ✅✅
+  #   ★ 失败不自动重试 ✅⚠️ —— race 有时是时序相关的 ✅✅，重试会掩盖真问题 ✅⚠️
+  race:
+    name: test -race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go test -race
+        run: go test -race -count=1 ./internal/...
+
+  # ---------- 交叉编译 ✅✅ ----------
+  # ★ 目标集跟 scripts/build-all.sh 保持一致 ✅✅
+  #   mipsle 必须有 ✅⚠️ —— MT7621 是 OpenWrt 装机量最大的芯片 ✅⚠️
+  cross:
+    name: cross build
+    runs-on: ubuntu-latest
+    needs: [test, race, vet, fmt]
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+          - arch: arm
+          - arch: mipsle
+          - arch: riscv64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          # 只验证能编译 ✅✅ —— 产物由 release 流程出 ✅✅
+          go build -trimpath -o /dev/null ./cmd/slx
+          echo "${{ matrix.arch }} 编译通过 ✅✅"
+
+  # ---------- 静态检查工具 ✅✅ ----------
+  lint:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - name: staticcheck
+        # 不阻塞 CI ✅✅ —— 但结果会显示出来 ✅✅
+        continue-on-error: true
+        run: staticcheck ./... || true
