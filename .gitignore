@@ -1,0 +1,20 @@
+﻿# 编译产物
+/slx-linux-*
+*.exe
+*.p0
+*.p1
+*.p2
+*.p3
+*.p4
+*.p5
+*.p6
+*.p7
+/bin/
+/dist/
+
+# IP 归属地库（ip2region xdb，11MB）
+*.xdb
+
+# 本地环境
+*.local
+.env
