@@ -192,6 +192,25 @@ func (s *System) RemoveForwardAccept(iface string, outgoing bool) {
 	_, _ = s.runCmd(s.IPTables, del...)
 }
 
+// HasForwardAccept 判断某条 FORWARD 放行规则是否在位。
+//
+// 看门狗用它判断「防火墙重载把规则冲掉了吗」⇒ 冲掉了就补回。
+//
+// 真机踩过：防火墙一重载，`-A FORWARD -o slx0 -j ACCEPT` 这两条就没了，
+// 而 mangle/ip rule/路由表都还在 ⇒ 状态页全绿，但境外流量永久断
+// （只能重启 SLX 才恢复）。
+func (s *System) HasForwardAccept(iface string, outgoing bool) bool {
+	args := []string{"-C", "FORWARD"}
+	if outgoing {
+		args = append(args, "-o", iface)
+	} else {
+		args = append(args, "-i", iface)
+	}
+	args = append(args, "-m", "comment", "--comment", markOf("forward-"+iface), "-j", "ACCEPT")
+	_, err := s.runCmd(s.IPTables, args...)
+	return err == nil
+}
+
 // EnsurePostroutingMasqOnIface 给「从某网卡出去的流量」做源地址伪装。
 //
 // 网关角色用：把内网流量在进入隧道前，源地址改成隧道内层 IP，
@@ -208,8 +227,12 @@ func (s *System) EnsurePostroutingMasqOnIface(iface, sourceCIDR string) (bool, e
 //
 // 用于 uninstall：只删我们自己加的，用户原有规则一条不动。
 func (s *System) CleanupMarked() (removed int) {
-	for _, table := range []string{"nat", "filter"} {
-		for _, chain := range []string{"POSTROUTING", "FORWARD"} {
+	// **mangle 表的 PREROUTING 必须一起扫**：
+	// 分流打标规则（-j MARK）就在 mangle/PREROUTING 里，
+	// 不扫它的话撤分流后打标规则仍在，
+	// 后面 ipset destroy 会因「集合仍被引用」而失败。
+	for _, table := range []string{"nat", "filter", "mangle"} {
+		for _, chain := range []string{"POSTROUTING", "FORWARD", "PREROUTING"} {
 			out, err := s.runCmd(s.IPTables, "-t", table, "-S", chain)
 			if err != nil {
 				continue

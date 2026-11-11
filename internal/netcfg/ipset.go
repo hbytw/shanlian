@@ -206,6 +206,9 @@ func (s *System) EnsureRuleInTable(table int, dst, dev string) (bool, error) {
 }
 
 // ClearTable 清空一个自定义路由表。
+//
+// ⚠️ 整表 flush：会连带清掉别人往这张表里加的路由。
+//    撤自己的规则请用 RemoveTableRoute（只删自己那一条）。
 func (s *System) ClearTable(table int) {
 	_, _ = s.runCmd(s.IP, "route", "flush", "table", strconv.Itoa(table))
 }
@@ -245,9 +248,60 @@ func (s *System) EnsureMarkRule(chain, inIface string, mark uint32, cnSet, exemp
 }
 
 // RemoveMarkRule 删除带指定 comment 的 mangle 规则。
+//
+// # 为什么不能自己拼 -D 规格
+//
+// 真实装上去的规则长这样：
+//
+//	-A PREROUTING -i br-lan -m set ! --match-set slx_cn dst
+//	  -m set ! --match-set slx_exempt dst -m comment --comment "slx:split-mark-br-lan"
+//	  -j MARK --set-xmark 0x100/0xffffffff
+//
+// 自己拼一个「只有 comment + MARK」的 -D 规格，iptables 一定匹配不上
+// ⇒ 删除被拒绝 ⇒ 而错误又被丢掉 ⇒ **规则永远删不掉**。
+// 撤分流后 MARK 规则仍在，后续 ipset destroy 会因「集合仍被引用」而失败。
+//
+// 所以改成：**扫链（-S）拿到真实规则，再原样 -D** —— 与 CleanupMarked 同一套路。
 func (s *System) RemoveMarkRule(chain, comment string) {
-	_, _ = s.runCmd(s.IPTables, "-t", "mangle", "-D", chain,
-		"-m", "comment", "--comment", markOf(comment), "-j", "MARK")
+	s.removeRulesWithComment("mangle", chain, markOf(comment))
+}
+
+// removeRulesWithComment 扫链，把带指定 comment 的规则逐条删掉，返回删除条数。
+func (s *System) removeRulesWithComment(table, chain, comment string) int {
+	out, err := s.runCmd(s.IPTables, "-t", table, "-S", chain)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, `"`+comment+`"`) {
+			continue
+		}
+		// 把 "-A CHAIN ..." 变成 "-D CHAIN ..."，其余原样保留。
+		del := strings.Replace(line, "-A "+chain, "-D "+chain, 1)
+		args := append([]string{"-t", table}, splitArgs(del)...)
+		if _, derr := s.runCmd(s.IPTables, args...); derr == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// RemoveTableRoute 只删除路由表里**指定的那一条**路由，不动表里的其它条目。
+//
+// 为什么需要它：ClearTable 是整表 flush，会把别人往这张表里加的路由一并冲掉。
+// 撤分流时应该只删自己那条（default dev slx0）。
+func (s *System) RemoveTableRoute(table int, dst, dev string) bool {
+	args := []string{"route", "del"}
+	if dst != "" {
+		args = append(args, dst)
+	}
+	if dev != "" {
+		args = append(args, "dev", dev)
+	}
+	args = append(args, "table", strconv.Itoa(table))
+	_, err := s.runCmd(s.IP, args...)
+	return err == nil
 }
 
 // HasMarkRule 判断某条链里是否已有带指定注释的规则（供看门狗使用）。
