@@ -37,7 +37,7 @@ func TestAgentLifecycleHooks(t *testing.T) {
 	go func() { _ = g.Run(ctx) }()
 
 	deadline := time.Now().Add(3 * time.Second)
-	for g.Addr() == "127.0.0.1:0" || g.ln == nil {
+	for g.Addr() == "127.0.0.1:0" || !g.Listening() {
 		if time.Now().After(deadline) {
 			t.Fatal("网关未在 3 秒内就绪")
 		}

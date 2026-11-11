@@ -237,11 +237,28 @@ func (g *Gateway) transportMode() string {
 }
 
 // Addr 返回实际监听地址（addr 为 :0 时能拿到真实端口）。
+//
+// g.ln 由 Run() 写、由其它 goroutine（状态页、测试）读 ⇒ **必须加锁**。
+// 之前这里是无锁读，-race 直接报 DATA RACE
+//（读写都发生在 crypto/tls.Listen() 返回后的那一瞬间）。
 func (g *Gateway) Addr() string {
-	if g.ln == nil {
+	g.mu.RLock()
+	ln := g.ln
+	g.mu.RUnlock()
+	if ln == nil {
 		return g.addr
 	}
-	return g.ln.Addr().String()
+	return ln.Addr().String()
+}
+
+// Listening 报告监听是否已经就绪。
+//
+// 给「等网关起来」的调用方用：Addr() 返回 ":0" 就说明还没监听上，
+// 但直接读 g.ln 会与 Run() 产生数据竞争。
+func (g *Gateway) Listening() bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.ln != nil
 }
 
 // Run 监听并接受 agent 连接，直到 ctx 取消。
@@ -266,7 +283,9 @@ func (g *Gateway) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("relay: 监听 %s 失败: %w", g.addr, err)
 	}
+	g.mu.Lock()
 	g.ln = ln
+	g.mu.Unlock()
 
 	// ctx 取消时关掉 listener，让 Accept 返回
 	go func() {
@@ -459,8 +478,11 @@ func (g *Gateway) HasAgent(nodeID string) bool {
 
 // Close 关闭监听与全部会话。
 func (g *Gateway) Close() {
-	if g.ln != nil {
-		_ = g.ln.Close()
+	g.mu.RLock()
+	ln := g.ln
+	g.mu.RUnlock()
+	if ln != nil {
+		_ = ln.Close()
 	}
 	g.mu.Lock()
 	sessions := make([]*agentSession, 0, len(g.agents))
@@ -472,6 +494,15 @@ func (g *Gateway) Close() {
 	for _, s := range sessions {
 		s.close()
 	}
+}
+
+// Session 返回某个 agent 的会话（加锁读）。
+//
+// 给测试与内部调用用：直接读 g.agents 会与写入产生数据竞争。
+func (g *Gateway) Session(nodeID string) *agentSession {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.agents[nodeID]
 }
 
 // ConnectError 描述一次建连失败，并携带「网关该怎么回客户端」的语义。

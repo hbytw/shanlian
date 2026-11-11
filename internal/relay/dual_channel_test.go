@@ -256,7 +256,7 @@ func startGatewayWithMode(t *testing.T, key []byte, mode string, gwNodeID string
 	// 等监听就绪
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if g.Addr() != "127.0.0.1:0" && g.ln != nil {
+		if g.Addr() != "127.0.0.1:0" && g.Listening() {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -405,7 +405,7 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 func agentSessionOf(g *Gateway, nodeID string) *agentSession {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.agents[nodeID]
+	return g.Session(nodeID)
 }
 
 // serveReverse 处理反向连接上网关开来的流（agent 在这条连接上是 yamux 客户端）。
