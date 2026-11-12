@@ -633,9 +633,16 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 		sel.inflight.Add(-1)
 		if err != nil {
 			lastErr = err
-			// 开流失败 = 这条通道的 yamux 会话有问题
-			// ⇒ 记一次探测失败，让通道熔断器接手（连续几次后重建）✅✅
-			sel.recordProbe(false, 0, time.Now())
+			// ★ 只换下一条，**不记探测失败** ✅✅
+			//
+			// 2026-11-12 stage7 踩坑 ✅⚠️：开流失败时调 recordProbe(false)
+			//   ⇒ 数据路径的失败直接喂给通道熔断器 ✅⚠️
+			//   ⇒ 网络拥塞时开流超时，5 次就熔断一条通道 ✅⚠️
+			//   ⇒ 所有通道接连熔断 ⇒ 彻底无路可走 ⇒ 100% 建连失败 ✅⚠️
+			//   （死亡螺旋：拥塞→超时→熔断→更少通道→更大压力→全熔断）
+			//
+			// ⇒ 通道死活由**专用探测**（每 15 秒）判定，数据路径不参与 ✅✅
+			// ⇒ 数据路径只负责「这条不行换下一条」✅✅
 			g.log.Debug("开流失败，换下一条通道",
 				logx.FieldEvent, "relay.open_retry",
 				logx.FieldNodeID, shortID(nodeID),
@@ -649,14 +656,12 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 		if err := stream.WriteConnectReq(conn, req); err != nil {
 			_ = conn.Close()
 			lastErr = err
-			sel.recordProbe(false, 0, time.Now())
 			continue
 		}
 		resp, err := stream.ReadConnectResp(conn)
 		if err != nil {
 			_ = conn.Close()
 			lastErr = err
-			sel.recordProbe(false, 0, time.Now())
 			continue
 		}
 		_ = conn.SetDeadline(time.Time{})
@@ -668,8 +673,8 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 			// ★ 注意：这条**不换通道重试** ✅✅ —— 换一条也是同一个 agent，结果一样
 			return nil, &ConnectError{Reset: resp.Reset, Reason: resp.Reason, TargetUnreachable: true}
 		}
-		// 成功：这条通道刚证明自己能用，记一次探测成功 ✅✅
-		sel.recordProbe(true, 0, time.Now())
+		// 成功：直接返回，不碰探测计数 ✅✅
+		//（通道评分由专用探测维护，数据路径的成功会把 rtt 拉成 0 ✅⚠️）
 		return conn, nil
 	}
 

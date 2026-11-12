@@ -80,19 +80,21 @@ func TestCandidatesFor_AllDeadReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestRecordProbeFailureOnOpenFail 验证开流失败会记探测失败（喂给通道熔断器）✅✅
-func TestRecordProbeFailureOnOpenFail(t *testing.T) {
+// TestRecordProbeFeedsBreaker 验证探测失败会喂给通道熔断器 ✅✅
+//
+// ★ 注意职责划分（stage7 踩坑后的设计）✅✅：
+//   - **专用探测**（每 15 秒）失败 ⇒ recordProbe(false) ⇒ 喂熔断器 ✅✅
+//   - **数据路径**（Open 开流失败）⇒ 只换下一条，**不碰探测计数** ✅✅
+//     （数据路径喂熔断器会造成死亡螺旋：拥塞→超时→熔断→全熔断→100%失败 ✅⚠️）
+func TestRecordProbeFeedsBreaker(t *testing.T) {
 	c := fakeChannel(ChannelTLS, 20)
 	now := time.Now()
 
-	// 模拟开流失败 ⇒ recordProbe(false)
-	c.recordProbe(false, 0, now)
-
-	// 连续失败到阈值 ⇒ 通道熔断
+	// 模拟专用探测连续失败
 	for i := 0; i < c.breaker.threshold; i++ {
 		c.recordProbe(false, 0, now.Add(time.Duration(i)*time.Second))
 	}
 	if !c.breaker.open {
-		t.Fatal("连续开流失败应触发通道熔断")
+		t.Fatal("专用探测连续失败应触发通道熔断")
 	}
 }
