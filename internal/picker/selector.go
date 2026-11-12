@@ -50,9 +50,15 @@ type Scored struct {
 	// TargetFailures 是该出口累计的「用户目标不可达」次数。
 	//
 	// 它**不代表出口坏了**，只是说明有这么多用户请求的目标打不开。
-	TargetFailures int    `json:"target_failures,omitempty"`
-	Eligible       bool   `json:"eligible"`
-	Note           string `json:"note,omitempty"`
+	TargetFailures int `json:"target_failures,omitempty"`
+	// LinkFailures 是该出口累计的**链路层**失败次数（L1 探测失败 ✅✅）。
+	//
+	// ★ 它**不参与熔断判定** ✅✅ —— 链路通 ≠ 出口可用 ✅✅
+	//   这里只是观测：链路抖得厉害时能在状态页上看到 ✅✅
+	LinkFailures int    `json:"link_failures,omitempty"`
+	LinkReason   string `json:"link_reason,omitempty"`
+	Eligible     bool   `json:"eligible"`
+	Note         string `json:"note,omitempty"`
 }
 
 // Decision 是一次选路的结果与依据。
@@ -90,8 +96,13 @@ type Selector struct {
 
 	// transport 是每个出口当前的通道健康度（0~100）。
 	//
-	// 由 relay 侧的通道评分周期性喂进来。
-	// 默认权重为 0 ⇒ 不参与打分 ⇒ 现有行为一字不变（决策：先不开，代码留好）。
+	// ★ 目前**没有调用方**（UpdateTransport 全库无人调用 ✅✅），
+	//   且 DefaultWeights 里的 Transport 权重为 0 ✅✅
+	//   ⇒ 这个维度当前不参与打分 ✅✅
+	//
+	// ★ 保留它的理由：★ 通道可用性已经由 relay 层直接排除 ✅✅
+	//   （relay.Gateway.UsableAgentIDs ✅✅ —— 通道全熔断的 agent 不进候选集 ✅✅）
+	//   ⇒ 不再需要「用评分来惩罚通道坏掉的 agent」这条绕路 ✅✅
 	transport map[string]float64
 
 	// breakers 是每个出口的 L1 熔断器（网关 ↔ 出口链路）。
@@ -113,7 +124,15 @@ type Selector struct {
 	// 它**不参与任何判定**（尤其不推进熔断）：用户访问打不开的站点
 	// 与「出口自己坏了」是两回事，混在一起会误杀唯一那台出口。
 	targetFailures map[string]int
-	table          *RouteTable
+	// linkFailures 记录每个出口累计的**链路层**失败次数（L1 探测失败 ✅✅）。
+	//
+	// ★ 它同样**不参与熔断判定** ✅✅ —— 链路通 ≠ 出口可用 ✅✅
+	//   链路差的后果由丢包率 → 评分来体现 ✅✅
+	//   这里只是留一个观测口子，供状态页展示 ✅✅
+	linkFailures map[string]int
+	// linkReason 记录最近一次链路失败的原因（供状态展示 ✅✅）
+	linkReason map[string]string
+	table      *RouteTable
 
 	// onlineSince 记录每个出口的接入时刻。
 	//
@@ -139,6 +158,8 @@ func NewSelector(weights Weights) *Selector {
 		gates:          make(map[string]*HealthGate, 8),
 		l2Breakers:     make(map[string]*Breaker, 8),
 		targetFailures: make(map[string]int, 8),
+		linkFailures:   make(map[string]int, 8),
+		linkReason:     make(map[string]string, 8),
 		table:          NewRouteTable(),
 		onlineSince:    make(map[string]time.Time, 8),
 	}
@@ -206,16 +227,76 @@ func (s *Selector) MarkAffinity(egressID, destKey string) {
 	q.Updated = time.Now()
 }
 
-// ReportHealth 把一次健康检查结果喂给熔断器。
+// ReportHealth 把一次**业务**健康结果喂给熔断器。
+//
+// ★ 语义：★ 只有「这个出口的业务持续失败」才允许熔断它 ✅✅
+// 链路探测走 ReportLinkHealth ✅✅（见那里的说明 ✅✅）
 func (s *Selector) ReportHealth(egressID string, ok bool, now time.Time) {
 	s.ReportHealthWithReason(egressID, ok, "", now)
 }
 
-// ReportHealthWithReason 喂一次健康检查结果，并记录失败原因（用于状态展示）。
+// ReportLinkHealth 报告一次**链路层**的健康结果（L1 探测、mesh 探测 ✅✅）。
+//
+// # ★ 它不推进熔断计数 ✅✅ —— 这是 2026-11-12 审计的第二条严重缺陷的修复 ✅⚠️
+//
+// 原来的设计里，链路探测的失败和业务结果**混在同一个成功率窗口**里 ✅⚠️：
+//
+//	L1 探测每 2 秒成功一次（链路本来就是通的 ✅✅）
+//	⇒ 窗口里绝大多数样本是成功 ✅⚠️
+//	⇒ 业务失败被稀释到 30% 以下 ✅⚠️
+//	⇒ **出口真的不能用了，也判不出不健康、永远不熔断** ✅⚠️
+//
+// # 为什么链路失败不该熔断出口 ✅✅
+//
+//	「链路通」≠「出口可用」 ✅✅
+//	链路边通、agent 边拒绝服务，是完全可能的场景 ✅✅
+//
+//	而链路易断的后果本来就该由**评分**来体现 ✅✅：
+//	L1 失败会让丢包率上升（proxyprobe.go 的 win.record ✅✅）
+//	⇒ UpdateL1 把丢包喂进评分 ✅✅
+//	⇒ 选路器自然少用它 ✅✅ —— 不用熔断也能达到效果 ✅✅
+//
+// # 那什么时候该熔断出口 ✅✅
+//
+//	「它的业务持续失败」 —— 这由 ReportHealthWithReason 负责 ✅✅
+//	（用户访问打不开的站点已被 TargetUnreachable 排除 ✅✅，
+//	  所以业务失败里剩下的就是真正的出口故障 ✅✅）
+//
+// # 出口彻底断掉怎么办 ✅✅
+//
+//	agent 掉线 ⇒ 建连返回 ErrNoAgent ⇒ 不是 ConnectError
+//	⇒ reportConnectFailure 归类为「出口链路失败」 ⇒ 喂熔断器 ✅✅
+//	⇒ 业务信号 ⇒ 熔断 ✅✅
+//
+// ⇒ 所以链路探测在这里只做一件事：记录状态，供状态页展示 ✅✅
+func (s *Selector) ReportLinkHealth(egressID string, ok bool, reason string, now time.Time) {
+	if egressID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ok {
+		delete(s.linkFailures, egressID)
+		return
+	}
+	s.linkFailures[egressID]++
+	s.linkReason[egressID] = reason
+}
+
+// LinkFailures 返回某个出口累计的链路层失败次数（供状态展示 ✅✅）。
+//
+// ★ 这个计数**不参与任何判定** ✅✅ —— 它只是观测 ✅✅
+func (s *Selector) LinkFailures(egressID string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.linkFailures[egressID]
+}
+
+// ReportHealthWithReason 喂一次**业务**健康结果，并记录失败原因（用于状态展示）。
 //
 // # ★ 抗抖：采样与判定是两层 ✅✅
 //
-// 高频的探测采样（每 2 秒一次）与低频的熔断判定（每 30 秒一次）是分开的 ✅✅
+// 高频的业务采样与低频的熔断判定（每 30 秒一次）是分开的 ✅✅
 //
 //   - 每次调用先记一次采样 ✅✅
 //   - **只有到了判定时点**才把结果报给熔断器 ✅✅
@@ -278,7 +359,9 @@ func (s *Selector) ReportHealthWithReason(egressID string, ok bool, reason strin
 	//
 	if !healthy {
 		// 判定不健康 ⇒ 报一次失败 ✅✅
-		// （熔断器自己的阈值是 1 ⇒ 一次失败就熔断 ✅✅）
+		// （熔断器自己的阈值与 HealthGate 的 needFails 一致 ✅✅
+		//   ⇒ 连续 3 次判定不健康才真的熔断 ✅✅
+		//   ⇒ 实际熔断耗时 = 30 秒 × 3 = 90 秒 ✅✅）
 		b.RecordWithReason(false, reason, now)
 		if tripped && !wasBroken {
 			// 出口刚进入熔断：让它的路由表条目立即失效
@@ -349,7 +432,21 @@ func (s *Selector) ReportL2Health(egressID string, ok bool, reason string, now t
 
 	b.RecordWithReason(ok, reason, now)
 
-	if !ok && wasBroken {
+	// ★ 2026-11-12 审计修正 ✅✅
+	//
+	// 原来的条件是 `!ok && wasBroken` ✅⚠️
+	// ⇒ wasBroken 读在 RecordWithReason **之前** ⇒ 它表示「**本来就已经**熔断」✅⚠️
+	// ⇒ 结果：**首次熔断的那一下反而不失效路由表** ✅⚠️
+	// ⇒ 而注释写的是「出口刚进入熔断」—— 与代码正好相反 ✅⚠️
+	//
+	// ⇒ 现在用 `!ok && !wasBroken` ✅✅
+	//   ⇒ 本次失败让熔断器从 closed 变成 open（首次熔断）⇒ 失效路由表 ✅✅
+	//   ⇒ 已经熔断着的时候重复失败 ⇒ 不再重复失效（没意义 ✅✅）
+	//
+	// ★ 实际危害本来不大：pick() 里会重新校验 Eligible ✅✅
+	//   ⇒ 熔断中的出口不会被路由表命中返回 ✅✅
+	//   但两条路径语义不一致本身就是隐患 ✅⚠️ ⇒ 对齐它 ✅✅
+	if !ok && !wasBroken {
 		// 出口刚进入熔断：让它的路由表条目立即失效
 		s.table.Invalidate(egressID)
 	}
@@ -438,6 +535,12 @@ func (s *Selector) ResetEgress(egressID string) {
 	// ⇒ 这正是「刚回来又熔断」的形态 ✅⚠️
 	delete(s.gates, egressID)
 	delete(s.targetFailures, egressID)
+	delete(s.linkFailures, egressID)
+	delete(s.linkReason, egressID)
+	// ★ 通道健康度也要清 ✅✅（2026-11-12 审计补充 ✅⚠️）
+	//   当前 Transport 权重为 0，不清也没有行为影响 ✅✅
+	//   ⇒ 但留着会让「已下线的出口」在状态页上还带着旧值 ✅⚠️
+	delete(s.transport, egressID)
 	delete(s.l1, egressID)
 	for dest, m := range s.l2 {
 		delete(m, egressID)
@@ -538,6 +641,8 @@ func (s *Selector) pick(dst net.IP, destKey string, candidates []string, now tim
 			Loss: round3(loss), Affinity: aff, Breaker: brName,
 			BreakerReason: brReason, Eligible: eligible,
 			TargetFailures: s.targetFailures[id],
+			LinkFailures:   s.linkFailures[id],
+			LinkReason:     s.linkReason[id],
 		}
 		all = append(all, st)
 
@@ -684,14 +789,15 @@ func (s *Selector) l2Locked(destKey, egressID string) *Quality {
 func (s *Selector) breakerLocked(egressID string) *Breaker {
 	b := s.breakers[egressID]
 	if b == nil {
-		// ★ 阈值是 1 ✅✅
+		// ★ 阈值 = HealthGate 的判定失败阈值（3）✅✅
 		//
-		// 因为抗抖已经交给 HealthGate 做了 ✅✅
-		// ⇒ 熔断器收到一次「判定失败」就该立刻熔断 ✅✅
-		// ⇒ 再让它自己累计 5 次，等于把判定时间又拉长 5 倍 ✅⚠️
+		// 两层必须一致 ✅✅：
+		//   HealthGate 每 30 秒判定一次，连续 3 次判定不健康才报一次失败 ✅✅
+		//   ⇒ 熔断器收到 3 次失败就该熔断 ✅✅
+		//   ⇒ 如果这里设成 1，判定门说要 3 次、熔断器 1 次就开 ✅⚠️
+		//     ⇒ 实际熔断时间会变成 30 秒 ✅⚠️ ⇒ 抗抖只剩 1/3 ✅⚠️
 		//
-		// ⇒ 实际熔断耗时 = HealthGate 的判定间隔 × 判定次数
-		//   = 30 秒 × 3 = 90 秒 ✅✅
+		// ⇒ 实际熔断耗时 = 30 秒 × 3 = 90 秒 ✅✅
 		b = NewBreakerWithThreshold(l1BreakerThreshold)
 		s.breakers[egressID] = b
 	}

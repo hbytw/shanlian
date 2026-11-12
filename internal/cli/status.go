@@ -158,9 +158,15 @@ type AgentDetail struct {
 	//
 	// 它**不代表出口坏了**，只说明有这么多用户请求的目标打不开
 	//（被墙 / 网站挂了）。这类失败不推进熔断计数。
-	TargetFailures int    `json:"target_failures,omitempty"`
-	Eligible       bool   `json:"eligible"` // 是否参与选路
-	Note           string `json:"note,omitempty"`
+	TargetFailures int `json:"target_failures,omitempty"`
+	// LinkFailures 是累计的**链路层**失败次数（L1 探测失败 ✅✅）。
+	//
+	// ★ 链路失败**不推进熔断计数** ✅✅ —— 链路通 ≠ 出口可用 ✅✅
+	//   这里只是观测：链路抖得厉害时能一眼看到 ✅✅
+	LinkFailures int    `json:"link_failures,omitempty"`
+	LinkReason   string `json:"link_reason,omitempty"`
+	Eligible     bool   `json:"eligible"` // 是否参与选路
+	Note         string `json:"note,omitempty"`
 }
 
 // PeerSummary 是对等节点概况。
@@ -682,6 +688,11 @@ func printProxyStatus(s *StatusSnapshot) {
 				// 只是说明有这些用户请求的目标打不开（被墙 / 网站挂了）。
 				if d.TargetFailures > 0 {
 					state = fmt.Sprintf("%s（目标打不开 %d 次）", state, d.TargetFailures)
+				}
+				// 链路失败次数也单列：链路抖 ≠ 出口坏了，
+				// 它不推进熔断计数，只是让人看得见链路在抖。
+				if d.LinkFailures > 0 {
+					state = fmt.Sprintf("%s（链路失败 %d 次）", state, d.LinkFailures)
 				}
 				fmt.Printf("    %-14s %6.1f %8s %8s %5.1f%%  %s\n",
 					d.ID, d.Score, rtt, bw, d.Loss*100, state)

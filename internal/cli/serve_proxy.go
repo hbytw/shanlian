@@ -333,6 +333,8 @@ func collectProxyStatus(
 				Breaker:        c.Breaker,
 				BreakerReason:  c.BreakerReason,
 				TargetFailures: c.TargetFailures,
+				LinkFailures:   c.LinkFailures,
+				LinkReason:     c.LinkReason,
 				Eligible:       c.Eligible,
 				Note:           c.Note,
 			})
@@ -456,7 +458,9 @@ func startProxyDNS(ctx context.Context, log *slog.Logger, c *config.Config,
 		return cnLoaded
 	}
 
-	cands := func() []string { return pp.gateway.AgentIDs() }
+	// ★ 用 UsableAgentIDs：排除「在线但一条通道都不剩」的黑洞代理 ✅✅
+	//   （2026-11-12 审计新增 ✅⚠️ —— 见 relay.UsableAgentIDs 的说明 ✅✅）
+	cands := func() []string { return pp.gateway.UsableAgentIDs() }
 	pol := newDNSPolicy(log, pp.picker, nodeID, cnNets, cands)
 
 	byEgress := func(egressID string) dnsfwd.Resolver {

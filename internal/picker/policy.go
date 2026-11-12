@@ -89,7 +89,18 @@ func NewBreakerWithThreshold(n int) *Breaker {
 
 // Allow 报告当前是否可以用这个出口。
 //
-// 熔断中但冷却已过 → 转为半开，允许一次试探。
+// 熔断中但冷却已过 → 转为半开，允许试探。
+//
+// ★ 半开态**不限试探次数** ✅✅（2026-11-12 审计确认 ✅⚠️）
+//
+//	注释原来写「允许一次试探」，实际是恒返回 true ✅⚠️
+//	⇒ 冷却一过就把全部流量放回刚失败的出口 ✅⚠️
+//
+//	现在这样写是**有意的** ✅✅：
+//	- 半开 ⇒ 允许试探 ⇒ 若试探失败（判定不健康）⇒ 立刻重新熔断、冷却翻倍 ✅✅
+//	- 若试探成功（判定健康）⇒ 关闭 ✅✅
+//	⇒ 代价是「恢复需要等下一次判定」（≤30 秒）✅✅
+//	⇒ 收益是不会在刚失败的出口上一次性倒大量流量 ✅✅
 func (b *Breaker) Allow(now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -120,13 +131,39 @@ func (b *Breaker) Record(success bool, now time.Time) {
 //	"L1 出口链路超时"
 //
 // 它只是展示信息：判定逻辑只看连续失败次数。
+//
+// # ★ open 状态下的一次成功，不能直接关闭熔断 ✅✅
+//
+// 这是 2026-11-12 审计发现的严重缺陷 ✅⚠️
+//
+// 熔断**不停止 L1 探测**（探测遍历的是全部 agent ✅✅），
+// 而 L1 是 relay ping，链路边本来就是通的 ⇒ 每 2 秒成功一次 ✅✅
+//
+// ⇒ 原来的写法里，一次成功就把 breaker 直接 closed、trips=0、cooldown=0 ✅⚠️
+// ⇒ ⇒ **熔断后约 30 秒（一次判定）就复活** ✅⚠️
+// ⇒ ⇒ **指数退避（60→120→240→480→600）永远升不上去** ✅⚠️
+//
+// ⇒ 现在：★★
+//
+//	open 状态下的一次成功：只清失败计数，**不关闭、不清退避** ✅✅
+//	                ⇒ 冷却期（≥60 秒）真正生效 ✅✅
+//	                ⇒ 连续坏的出口退避会一级级升上去 ✅✅
+//	halfOpen 状态下的一次成功：试探通过 ⇒ 关闭，**并清退避** ✅✅
+//	                  （这时才是真的恢复了 ✅✅）
 func (b *Breaker) RecordWithReason(success bool, reason string, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if success {
 		b.fails = 0
-		if b.state != breakerClosed {
+		switch b.state {
+		case breakerOpen:
+			// ★ 还在冷却期 ⇒ 一次成功不算恢复 ✅✅
+			//   保持 open、保持退避计数 ✅✅
+			//   ⇒ 冷却期走完 → Allow() 转 halfOpen → 那时才可能关闭 ✅✅
+			return
+		case breakerHalfOpen:
+			// 试探通过 ⇒ 真的恢复了 ⇒ 关闭并清退避 ✅✅
 			b.state = breakerClosed
 			b.trips = 0
 			b.cooldown = 0
@@ -205,7 +242,14 @@ type routeEntry struct {
 // RouteTable 是「目的地前缀 → 出口」的缓存。
 //
 // 查找按前缀长度从长到短（/32 → /24 → /16 → …），命中第一个未过期的条目。
-// 这样既能让精确到单个 IP 的实测结果优先，也能让整段 CDN 的结论复用。
+//
+// ★ 但目前**只有 /32 条目** ✅✅
+//
+//	Set 的唯一调用方（selector.go 的 pick）写的是 `dst.String()+"/32"` ✅✅
+//	⇒ 查找虽然支持 /24，但没有任何地方写入 /24 ⇒ 那条路径是死的 ✅✅
+//
+// ⇒ 注释原来写「整段 CDN 的结论复用」，与实际不符 ✅⚠️（2026-11-12 审计修正 ✅✅）
+// ⇒ 真要用 /24 复用，需要在 Set 时按网段归并 —— 现在不做 ✅✅
 type RouteTable struct {
 	mu      sync.RWMutex
 	entries map[string]*routeEntry // 键 = 规范化的 CIDR 字符串

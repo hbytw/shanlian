@@ -476,6 +476,54 @@ func (g *Gateway) HasAgent(nodeID string) bool {
 	return ok
 }
 
+// HasUsableChannel 判断某 node_id 的 agent 当前是否**还有可用通道**。
+//
+// # 为什么需要它 ✅✅（2026-11-12 审计新增 ✅⚠️）
+//
+// 「agent 在线」≠「agent 能用」✅✅
+//
+// 一台 agent 的所有通道都可能被熔断（通道级熔断，冷却 60 秒起 ✅✅）
+// 或正在重建（ZT 断线后要重新握手 ✅✅）。
+//
+// **这时候它仍在候选集里 ✅⚠️** ——
+//   - EgressCandidates 只按「有 egress 能力 + 状态 alive」过滤 ✅⚠️
+//   - L1 探测对「无可用通道」的 agent 整条跳过（不记丢包、不推进熔断）✅✅
+//   - ⇒ 它的丢包率永远不更新、评分永远保持高位 ✅⚠️
+//   - ⇒ 选路器会一直选中它 ⇒ 每次连接都失败 ✅⚠️
+//   - ⇒ 它就是个**黑洞代理** ✅⚠️
+//
+// **.26 这台只有一条 ZeroTier 通道（没有直连）✅✅**
+// ⇒ ZT 一断它立刻变成黑洞代理 ✅⚠️
+//
+// ⇒ 所以候选集要**额外**按「有可用通道」过滤 ✅✅
+func (g *Gateway) HasUsableChannel(nodeID string) bool {
+	g.mu.RLock()
+	s, ok := g.agents[nodeID]
+	g.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return s.hasUsableChannel(time.Now())
+}
+
+// UsableAgentIDs 返回**有可用通道**的 agent node_id 列表。
+//
+// AgentIDs 的加强版：把「在线但一条通道都不剩」的 agent 排除掉 ✅✅
+//
+// 为什么需要它：见 HasUsableChannel 的说明 ✅✅
+//
+//	（黑洞代理的问题：它们在线、评分高、但每条连接都失败 ✅⚠️）
+func (g *Gateway) UsableAgentIDs() []string {
+	ids := g.AgentIDs()
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if g.HasUsableChannel(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // Close 关闭监听与全部会话。
 func (g *Gateway) Close() {
 	g.mu.RLock()

@@ -48,6 +48,8 @@ func (s *Selector) SnapshotState(candidates []string, now time.Time) Snapshot {
 			NodeID: id, Score: round1(sc), RTTMS: round1(rtt),
 			BWMbps: round1(bw), Loss: round3(loss), Affinity: aff, Eligible: true,
 			TargetFailures: s.targetFailures[id],
+			LinkFailures:   s.linkFailures[id],
+			LinkReason:     s.linkReason[id],
 		}
 		// L1（网关↔出口）与 L2（出口↔公网）两套独立计数汇总成一个结论。
 		view := s.breakerViewLocked(id, now)
