@@ -5,9 +5,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -950,12 +950,33 @@ func resolveOnChannel(conn net.Conn, domain string, timeout time.Duration) ([]ne
 // 这里把内部日志丢弃，重要事件我们自己在上面用 logx 记录。
 func yamuxConfig() *yamux.Config {
 	return &yamux.Config{
-		AcceptBacklog:          256,
-		EnableKeepAlive:        true,
-		KeepAliveInterval:      10 * time.Second,
-		ConnectionWriteTimeout: 10 * time.Second,
+		AcceptBacklog:     256,
+		EnableKeepAlive:   true,
+		KeepAliveInterval: 10 * time.Second,
+		// ★ ConnectionWriteTimeout：10 秒 → 30 秒 ✅✅
+		//
+		// 2026-11-12 晚高峰排查的根因 ✅⚠️：
+		//
+		//	yamux keepalive 每 10 秒发一次 Ping，Ping 响应超过
+		//	ConnectionWriteTimeout 就 exitErr(ErrKeepAliveTimeout)
+		//	⇒ **整个 yamux 会话被杀** ✅⚠️
+		//
+		//	原值 10 秒 ⇒ 晚高峰国际链路拥塞、RTT 尖峰超过 10 秒
+		//	⇒ 任何一次 Ping 撞上尖峰 ⇒ TLS 通道整条死掉 ✅⚠️
+		//	⇒ 实测：TLS 通道每 120 秒规律性死（探测周期发现），
+		//	   而 ZT 通道（ZeroTier 自己的路径）不死 ✅✅
+		//
+		//	30 秒：容忍拥塞尖峰；死连接检测仍在 40 秒内完成
+		//	（10s keepalive 间隔 + 30s 超时），且有通道探测兜底 ✅✅
+		ConnectionWriteTimeout: 30 * time.Second,
 		MaxStreamWindowSize:    512 * 1024,
-		LogOutput:              io.Discard,
+		// ★ yamux 内部日志走 stderr ✅✅
+		//
+		// procd 把 stderr 送进 syslog ⇒ logread 能直接看到
+		// "keepalive failed: timeout" 这类死因 ✅✅
+		//（之前 io.Discard 丢弃，TLS 通道规律性死时只能靠猜 ✅⚠️）
+		// yamux 只在出错时打日志，不会刷屏 ✅✅
+		LogOutput: os.Stderr,
 	}
 }
 
