@@ -194,14 +194,17 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 		return err
 	}
 
-	sess, err := yamux.Client(conn, &yamux.Config{
-		AcceptBacklog:          256,
-		EnableKeepAlive:        true,
-		KeepAliveInterval:      10 * time.Second,
-		ConnectionWriteTimeout: 10 * time.Second,
-		MaxStreamWindowSize:    512 * 1024,
-		LogOutput:              io.Discard, // 同上：必须显式指定，否则 yamux 拒绝
-	})
+	// ★ 用共享的 yamuxConfig()，不再内联 ✅✅
+	//
+	// 2026-11-12 审计发现：这里是内联配置，ConnectionWriteTimeout 是 10 秒，
+	// 而网关侧的 yamuxConfig() 已经改成 30 秒 ⇒ **两端超时不一致** ✅⚠️
+	//
+	// yamux 是两端的：任何一端的 keepalive 写超时都会杀掉整条会话 ✅⚠️
+	// ⇒ agent 侧 10 秒超时 ⇒ 家宽上行拥塞、ACK 延迟时
+	//   agent 的 yamux 写不进去 ⇒ agent 杀会话 ⇒ 网关看到 connection reset ✅⚠️
+	//
+	// ⇒ 统一走 yamuxConfig()（30 秒），两端一致 ✅✅
+	sess, err := yamux.Client(conn, yamuxConfig())
 	if err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("建立 yamux 会话失败: %w", err)
