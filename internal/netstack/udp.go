@@ -265,8 +265,8 @@ func (s *Stack) runUDPFlow(f *udpFlow, addr net.IP, port uint16) {
 	//
 	// 注意：只记录**数据流动**，不记录「建连成功」——
 	// 建连成功但一个包都没通的流，几秒后就会被回收。
-	tunnel := &activityConn{Conn: conn, flow: f}
-	sock := &activityConn{Conn: local, flow: f}
+	tunnel := &activityConn{Conn: conn, flow: f, bytes: &s.udpBytes}
+	sock := &activityConn{Conn: local, flow: f, bytes: &s.udpBytes}
 
 	// 必须用 stream.FramedPipe：它是网关与 agent 共用的帧格式实现。
 	// 曾经这里自己写了一套 4 字节长度头，而 agent 侧用的是 stream 包的
@@ -276,16 +276,25 @@ func (s *Stack) runUDPFlow(f *udpFlow, addr net.IP, port uint16) {
 	s.finishUDPFlow(f)
 }
 
-// activityConn 在数据流动时给所属四元组打上「最近活跃」的时间戳。
+// activityConn 在数据流动时给所属四元组打上「最近活跃」的时间戳，
+// 并统计中继的字节数。
 type activityConn struct {
 	net.Conn
 	flow *udpFlow
+	// bytes 是字节计数器（可为 nil ⇒ 不计数）。
+	//
+	// 为什么统计 ✅✅：以前 UDP 只有「连接数」和「失败数」✅⚠️
+	//   ⇒ 无法回答「UDP 到底有没有真的在走代理」「搬了多少数据」✅⚠️
+	bytes *atomic.Int64
 }
 
 func (c *activityConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.flow.touch()
+		if c.bytes != nil {
+			c.bytes.Add(int64(n))
+		}
 	}
 	return n, err
 }
@@ -294,6 +303,9 @@ func (c *activityConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
 		c.flow.touch()
+		if c.bytes != nil {
+			c.bytes.Add(int64(n))
+		}
 	}
 	return n, err
 }

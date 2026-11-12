@@ -1079,6 +1079,58 @@ func (s *agentSession) candidatesFor(dst string, now time.Time, mode string) []*
 	return out
 }
 
+// pickProbeChannel 为探测选一条通道 ✅✅
+//
+// ★ 为什么探测要避开业务主通道 ✅✅（审计「第 3 批 #14」）：
+//
+//	探测与业务流量共用同一个 yamux 会话 ⇒ **共享同一条 TCP 的拥塞窗口** ✅⚠️
+//	⇒ 一条几 MB 的业务传输能把窗口占满 ✅⚠️
+//	⇒ 探测的小请求排在它后面 ⇒ 探测超时 ✅⚠️
+//	⇒ 而此时通道其实好得很 ✅✅（只是被数据挤了 ✅⚠️）
+//	⇒ 探测超时会被当成「出口链路失败」⇒ **误杀好出口 ⇒ 熔断级联** ✅⚠️ ✅ ✅
+//
+// ⇒ 所以探测优先选：**不是**业务主通道、且在途流最少的那条 ✅✅
+//
+// ★ 退化情况 ✅✅：只有一条通道时仍然用它 ✅✅
+//
+//	（总不能让「没别的通道」变成「不探测」——那更糟 ✅⚠️）
+func (s *agentSession) pickProbeChannel(now time.Time, mode string) *channel {
+	primary := s.selectChannel(now, mode)
+	if primary == nil {
+		return nil
+	}
+
+	var best *channel
+	for _, c := range s.channels() {
+		if !c.usable(now) {
+			continue
+		}
+		switch mode {
+		case TransportTLS:
+			if c.kind != ChannelTLS {
+				continue
+			}
+		case TransportZT:
+			if c.kind != ChannelZT {
+				continue
+			}
+		}
+		// 第一步：先排除业务主通道 ✅✅
+		if c == primary {
+			continue
+		}
+		// 第二步：在剩下的里挑在途流最少的 ✅✅
+		if best == nil || c.inflight.Load() < best.inflight.Load() {
+			best = c
+		}
+	}
+	if best != nil {
+		return best
+	}
+	// 只有主通道可用 ⇒ 退化用它 ✅✅
+	return primary
+}
+
 // DefaultProbeTimeout 是单次通道探测的默认超时（秒）。
 //
 // 5 秒偏紧：实测直连 RTT 75~267ms，一次探测还要含 yamux 建流开销，

@@ -177,7 +177,15 @@ func serveProxy(
 				"write_err", werr,
 				"tcp_ok", ns.TCPAccepted,
 				"tcp_fail", ns.TCPFailed,
-				"udp_ok", ns.UDPAccepted)
+				// ★ 失败要分类，否则线上看到一个 tcp_fail 涨了根本不知道查哪 ✅✅
+				"tcp_fail_conn", ns.TCPFailConnect,
+				"tcp_fail_ep", ns.TCPFailEndpoint,
+				"tcp_fail_lim", ns.TCPFailLimit,
+				"tcp_active", ns.TCPActive,
+				"tcp_bytes", ns.TCPBytes,
+				"udp_ok", ns.UDPAccepted,
+				"udp_fail", ns.UDPFailed,
+				"udp_bytes", ns.UDPBytes)
 			lastRead, lastWrite = read, write
 		}
 	}
@@ -336,17 +344,24 @@ func collectProxyStatus(
 	}
 
 	s.Agents = AgentSummary{
-		Details:     details,
-		IcmpReplied: icmpOK,
-		IcmpDropped: icmpDrop,
-		Count:       len(ids),
-		IDs:         shortIDs(ids),
-		Listen:      pp.gateway.Addr(),
-		TCPAccepted: ns.TCPAccepted,
-		TCPFailed:   ns.TCPFailed,
-		UDPAccepted: ns.UDPAccepted,
-		TunRead:     read,
-		TunWrite:    write,
+		Details:         details,
+		IcmpReplied:     icmpOK,
+		IcmpDropped:     icmpDrop,
+		Count:           len(ids),
+		IDs:             shortIDs(ids),
+		Listen:          pp.gateway.Addr(),
+		TCPAccepted:     ns.TCPAccepted,
+		TCPFailed:       ns.TCPFailed,
+		UDPAccepted:     ns.UDPAccepted,
+		TCPFailConnect:  ns.TCPFailConnect,
+		TCPFailEndpoint: ns.TCPFailEndpoint,
+		TCPFailLimit:    ns.TCPFailLimit,
+		TCPActive:       ns.TCPActive,
+		TCPBytes:        ns.TCPBytes,
+		UDPBytes:        ns.UDPBytes,
+		UDPFailed:       ns.UDPFailed,
+		TunRead:         read,
+		TunWrite:        write,
 	}
 
 	// —— 故障判定 ——

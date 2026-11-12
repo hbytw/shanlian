@@ -626,9 +626,21 @@ func (g *Gateway) Ping(nodeID string, timeout time.Duration) (time.Duration, err
 		return 0, ErrNoAgent
 	}
 
-	// 探测走**当前选中的通道**：L1 指标要反映「业务流量实际走的那条路」，
-	// 而不是某条固定的旁路。
-	sel := s.selectChannel(time.Now(), g.transportMode())
+	// ★ 探测走**专用的探测通道**，不是业务主通道 ✅✅（审计「第 3 批 #14」）
+	//
+	// 为什么可以这么做 ✅✅：
+	//   L1 指标要衡量的是「网关 ↔ 这个 agent」的链路质量 ✅✅
+	//   而同一个 agent 的多条 TLS 通道走的是**同一条物理路径** ✅✅
+	//   （只是不同的 TCP 连接）⇒ 换一条测出来的 RTT 基本一样 ✅✅
+	//
+	// 换来的好处 ✅✅：
+	//   探测与业务**不再共享同一条 TCP 的拥塞窗口** ✅✅
+	//   ⇒ 一条几 MB 的业务传输不会把探测的小请求堵在后面 ✅✅
+	//   ⇒ 探测超时不再被误判成「出口链路失败」⇒ **不再误杀好出口** ✅✅
+	//   （那正是熔断级联的源头之一 ✅⚠️）
+	//
+	// 只有一条通道时自动退化到它 ✅✅（见 pickProbeChannel ✅✅）
+	sel := s.pickProbeChannel(time.Now(), g.transportMode())
 	if sel == nil {
 		return 0, ErrNoUsableChannel
 	}
@@ -657,6 +669,21 @@ func (g *Gateway) PingHost(nodeID string, ip net.IP, timeout time.Duration) (boo
 	cands := s.candidatesFor(ip.String(), time.Now(), g.transportMode())
 	if len(cands) == 0 {
 		return false, ErrNoUsableChannel
+	}
+	// ★ 把探测专用通道排到最前面 ✅✅
+	//
+	// candidatesFor 是「业务主通道优先」✅⚠️ —— 对业务是对的 ✅✅
+	// 但对探测是错的 ✅⚠️：探测要和业务错开，才不会被业务流量饿死 ✅✅
+	// （审计「第 3 批 #14」✅✅）
+	if pc := s.pickProbeChannel(time.Now(), g.transportMode()); pc != nil {
+		reordered := make([]*channel, 0, len(cands))
+		reordered = append(reordered, pc)
+		for _, c := range cands {
+			if c != pc {
+				reordered = append(reordered, c)
+			}
+		}
+		cands = reordered
 	}
 	var lastErr error
 	for _, c := range cands {
