@@ -540,12 +540,53 @@ func (s *agentSession) selectChannelLocked(now time.Time, mode string, commit bo
 		return nil
 	}
 
+	// ★ auto 模式：TLS 直连优先，TLS 全部不可用才回退 ZT 隧道 ✅✅
+	//
+	// 为什么要这样（2026-11-12 晚高峰排查结论）：
+	//
+	//	- ZT 是 ZeroTier 的 UDP 虚拟以太网，跨境 UDP 不稳定
+	//	- 实测 ZT 隧道延迟与裸路径相当（49ms vs 70ms），但**间歇性抖动更明显**
+	//	- 而 TLS 直连走 TCP 443，与 v2ray 同类路径，稳定性更好
+	//
+	// 之前的问题：TLS 评分比 ZT 高一点（48.7 vs 48.2），
+	// 但滞回门槛 ChannelSwitchMargin=8 分，差 0.5 分切不过去
+	// ⇒ 流量一直挤在 ZT 上 ✅⚠️
+	//
+	// 现在：★ 只要有可用的 TLS 通道，就只在 TLS 里选 ✅✅
+	//        TLS 全部熔断/关闭 ⇒ cands 里没有 TLS ⇒ 自动回退 ZT ✅✅
+	//
+	// .26 这种只有 ZT 没有 TLS 的 agent：cands 里全是 ZT ⇒ 用 ZT ✅✅
+	if mode == TransportAuto {
+		var tlsCands []*channel
+		for _, c := range cands {
+			if c.kind == ChannelTLS {
+				tlsCands = append(tlsCands, c)
+			}
+		}
+		if len(tlsCands) > 0 {
+			cands = tlsCands
+		}
+		// 没有 TLS 通道 ⇒ cands 保持原样（全是 ZT）✅✅
+	}
+
 	best := cands[0]
 	bestScore := best.score(now)
 	for _, c := range cands[1:] {
 		if sc := c.score(now); sc > bestScore {
 			best, bestScore = c, sc
 		}
+	}
+
+	// ★ TLS 优先时跳过滞回 ✅✅
+	//
+	// 滞回的目的是避免频繁切换，但 TLS 优先是**策略选择**不是评分比较
+	// ⇒ 只要 TLS 可用就切过去，不看评分差距 ✅✅
+	// ⇒ TLS 不可用时 cands 里没有 TLS，走不到这里 ✅✅
+	if mode == TransportAuto && best.kind == ChannelTLS {
+		if commit {
+			s.primary = best
+		}
+		return best
 	}
 
 	if s.primary != nil && s.primary.usable(now) {

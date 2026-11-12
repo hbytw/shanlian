@@ -38,33 +38,36 @@ func TestPickProbeChannel_DoesNotChangeBusinessPrimary(t *testing.T) {
 //
 // ★ 关键场景 ：
 //
-//	业务走 ZT（评分高），探测按 tls 模式选
-//	⇒ 排除的必须是 **ZT 那条**（真正承载业务的那条）
-//	⇒ 而不是「tls 模式里评分最高的那条」
+//	2026-11-12 起 auto 模式 TLS 优先 ⇒ 业务主通道是 TLS 那条
+//	探测按 tls 模式选 ⇒ 排除的必须是**业务主通道那条 TLS**
+//	⇒ 而不是「tls 模式里评分最高的那条」（可能就是业务主通道本身）
 func TestPickProbeChannel_ExcludesGlobalBusinessPrimary(t *testing.T) {
 	s := &agentSession{nodeID: "n-mixed"}
-	// ★ fakeChannel 的第二个参数是 **RTT**，越小越快、评分越高
-	// ZT 通道更快 ⇒ 业务会选它
-	zt := fakeChannel(ChannelZT, 20)
-	tls := fakeChannel(ChannelTLS, 80)
+	// 两条 TLS + 一条 ZT ⇒ 业务主通道必是 TLS（TLS 优先）✅✅
+	// fakeChannel 第二个参数是 RTT，越小越快、评分越高
+	tlsA := fakeChannel(ChannelTLS, 20) // 评分最高 ⇒ 业务会选它
+	tlsB := fakeChannel(ChannelTLS, 80)
+	zt := fakeChannel(ChannelZT, 40)
+	s.addChannel(tlsA)
+	s.addChannel(tlsB)
 	s.addChannel(zt)
-	s.addChannel(tls)
 
 	now := time.Now()
 	business := s.selectChannel(now, TransportAuto)
-	if business != zt {
-		t.Fatalf("业务主通道应是 ZT 那条，实际 %v", business)
+	if business != tlsA {
+		t.Fatalf("业务主通道应是评分最高的 TLS 那条，实际 %v", business)
 	}
 
-	// 探测走 tls 模式
+	// 探测走 tls 模式 ⇒ 应排除业务主通道 tlsA，选 tlsB
 	probe := s.pickProbeChannel(now, TransportTLS)
 	if probe == nil {
 		t.Fatal("拿不到探测通道")
 	}
-	// ★ 只有一条 TLS 通道，而它是探测唯一可选的 ⇒ 退化用它
-	//   （但**不能**是 ZT —— 那是业务主通道 ）
-	if probe == zt {
-		t.Fatal("探测不该选到业务主通道（ZT 那条）")
+	if probe == business {
+		t.Fatal("探测不该选到业务主通道（承载业务流量的那条）")
+	}
+	if probe != tlsB {
+		t.Fatalf("探测应选另一条 TLS（tlsB），实际 %v", probe)
 	}
 }
 

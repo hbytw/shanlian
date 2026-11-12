@@ -70,33 +70,126 @@ func TestSelectChannel_TLSModeUsesDirect(t *testing.T) {
 
 // TestSelectChannel_Hysteresis 验证 8 分滞回：
 // 优势不到 8 分不切换，超过 8 分才切。
+//
+// ★ 注意：滞回只在「没有 TLS 通道」时生效 ✅✅
+//
+// auto 模式下 TLS 优先（2026-11-12 改动）：只要有可用 TLS 就直接选 TLS，
+// 跳过滞回。所以滞回测试要用两条 ZT 通道（没有 TLS）来测。
 func TestSelectChannel_Hysteresis(t *testing.T) {
 	now := time.Now()
 	s := &agentSession{nodeID: "n1"}
 
-	zt := fakeChannel(ChannelZT, 200)
-	s.addChannel(zt)
-	tlsCh := fakeChannel(ChannelTLS, 200)
-	s.addChannel(tlsCh)
+	// 只放 ZT 通道（没有 TLS）⇒ 走滞回逻辑 ✅✅
+	zt1 := fakeChannel(ChannelZT, 200)
+	s.addChannel(zt1)
+	zt2 := fakeChannel(ChannelZT, 200)
+	s.addChannel(zt2)
 
-	// 先把主通道定在 zt 上（auto 模式，分数相同时第一个候选胜出）。
+	// 先把主通道定在 zt1 上（auto 模式，分数相同时第一个候选胜出）。
 	sel := s.selectChannel(now, TransportAuto)
 	if sel == nil || sel.kind != ChannelZT {
 		t.Fatalf("初始应选中 zt 通道，实际 %v", sel)
 	}
+	first := sel
 
-	// 直连通道只快一点点（RTT 190 vs 200，分数差 < 8）→ 不切换。
-	setScore(tlsCh, 190)
+	// 另一条只快一点点（RTT 190 vs 200，分数差 < 8）→ 不切换。
+	setScore(zt2, 190)
 	sel = s.selectChannel(now, TransportAuto)
-	if sel == nil || sel.kind != ChannelZT {
+	if sel != first {
 		t.Fatalf("优势不足 8 分时不应切换，实际选 %v", sel)
 	}
 
-	// 直连通道明显更好（RTT 60 vs 200）→ 切换。
-	setScore(tlsCh, 60)
+	// 另一条明显更好（RTT 60 vs 200）→ 切换。
+	setScore(zt2, 60)
+	sel = s.selectChannel(now, TransportAuto)
+	if sel == zt1 {
+		t.Fatalf("优势超过 8 分时应切换到更好的通道，实际仍选 %v", sel)
+	}
+}
+
+// TestSelectChannel_TLSPreferred 验证 auto 模式下 TLS 直连优先 ✅✅
+//
+// 2026-11-12 晚高峰排查结论：ZT 是 UDP 虚拟以太网，跨境 UDP 间歇性抖动明显；
+// TLS 直连走 TCP 443，与 v2ray 同类路径，稳定性更好。
+// 之前 TLS 评分略高但差 8 分滞回门槛切不过去，流量一直挤在 ZT 上。
+func TestSelectChannel_TLSPreferred(t *testing.T) {
+	now := time.Now()
+	s := &agentSession{nodeID: "n1"}
+
+	// ZT 评分明显更高（RTT 20），TLS 评分低（RTT 200）
+	zt := fakeChannel(ChannelZT, 20)
+	tlsCh := fakeChannel(ChannelTLS, 200)
+	s.addChannel(zt)
+	s.addChannel(tlsCh)
+
+	// auto 模式应选 TLS（优先级高于评分）✅✅
+	sel := s.selectChannel(now, TransportAuto)
+	if sel == nil || sel.kind != ChannelTLS {
+		t.Fatalf("auto 模式应优先选 TLS 直连，实际 %v", sel)
+	}
+}
+
+// TestSelectChannel_TLSPreferredSkipsHysteresis 验证 TLS 优先跳过滞回 ✅✅
+//
+// TLS 优先是策略选择，不是评分比较 ⇒ 只要 TLS 可用就切，不看评分差距
+func TestSelectChannel_TLSPreferredSkipsHysteresis(t *testing.T) {
+	now := time.Now()
+	s := &agentSession{nodeID: "n1"}
+
+	// 先把主通道定在 ZT 上
+	zt := fakeChannel(ChannelZT, 20)
+	s.addChannel(zt)
+	sel := s.selectChannel(now, TransportAuto)
+	// 此时没有 TLS，选 ZT
+	if sel == nil || sel.kind != ChannelZT {
+		t.Fatalf("没有 TLS 时应选 ZT，实际 %v", sel)
+	}
+
+	// TLS 通道上线（评分很低，RTT 500）⇒ 应立即切换，不看滞回
+	tlsCh := fakeChannel(ChannelTLS, 500)
+	s.addChannel(tlsCh)
 	sel = s.selectChannel(now, TransportAuto)
 	if sel == nil || sel.kind != ChannelTLS {
-		t.Fatalf("优势超过 8 分时应切换到直连，实际选 %v", sel)
+		t.Fatalf("TLS 上线后应立即切换（跳过滞回），实际 %v", sel)
+	}
+}
+
+// TestSelectChannel_FallsBackWhenTLSDies 验证 TLS 全部不可用时回退 ZT ✅✅
+func TestSelectChannel_FallsBackWhenTLSDies(t *testing.T) {
+	now := time.Now()
+	s := &agentSession{nodeID: "n1"}
+
+	zt := fakeChannel(ChannelZT, 100)
+	tlsCh := fakeChannel(ChannelTLS, 100)
+	s.addChannel(zt)
+	s.addChannel(tlsCh)
+
+	// 正常时选 TLS ✅✅
+	sel := s.selectChannel(now, TransportAuto)
+	if sel == nil || sel.kind != ChannelTLS {
+		t.Fatalf("应选 TLS，实际 %v", sel)
+	}
+
+	// TLS 熔断 ⇒ 回退 ZT ✅✅
+	tlsCh.closed.Store(true)
+	sel = s.selectChannel(now, TransportAuto)
+	if sel == nil || sel.kind != ChannelZT {
+		t.Fatalf("TLS 不可用时应回退 ZT，实际 %v", sel)
+	}
+}
+
+// TestSelectChannel_ZTOnlyAgent 验证只有 ZT 的 agent（如 .26）仍可用 ✅✅
+func TestSelectChannel_ZTOnlyAgent(t *testing.T) {
+	now := time.Now()
+	s := &agentSession{nodeID: "n1"}
+
+	// 只有 ZT，没有 TLS
+	zt := fakeChannel(ChannelZT, 100)
+	s.addChannel(zt)
+
+	sel := s.selectChannel(now, TransportAuto)
+	if sel == nil || sel.kind != ChannelZT {
+		t.Fatalf("只有 ZT 时应选 ZT，实际 %v", sel)
 	}
 }
 
