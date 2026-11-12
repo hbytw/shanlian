@@ -11,12 +11,12 @@ import (
 
 // —— 建连失败与熔断 ——
 //
-// ★ 现在熔断的判定是「采样与判定分离」✅✅：
-//   高频的失败采样不直接熔断 ✅✅
-//   ⇒ 每 30 秒判定一次，连续 3 次判定不健康才熔断 ✅✅
-//   ⇒ 实际熔断耗时 90 秒 ✅✅（改动前只要 10 秒 ✅⚠️）
+// ★ 现在熔断的判定是「采样与判定分离」：
+//   高频的失败采样不直接熔断
+//   ⇒ 每 30 秒判定一次，连续 3 次判定不健康才熔断
+//   ⇒ 实际熔断耗时 90 秒 （改动前只要 10 秒 ）
 //
-// ⇒ 所以这些测试要**推进模拟时间**才能跨过判定点 ✅✅
+// ⇒ 所以这些测试要**推进模拟时间**才能跨过判定点
 
 // TestReportConnectFailure_TargetUnreachableDoesNotTrip 覆盖验收项 a：
 // 「用户目标不可达」不推进熔断计数（连失败 10 次也不熔断）。
@@ -47,7 +47,7 @@ func TestReportConnectFailure_EgressFaultTrips(t *testing.T) {
 	now := time.Now()
 
 	// relay 层失败（agent 会话断 / 开不了流）—— 不是 ConnectError。
-	// ★ 推进模拟时间，跨过每个判定点 ✅✅
+	// ★ 推进模拟时间，跨过每个判定点
 	step := 15 * time.Second
 	for i := 0; i < 8; i++ {
 		reportConnectFailure(pick, nil, "egA",

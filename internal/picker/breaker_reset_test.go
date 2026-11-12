@@ -24,7 +24,7 @@ func TestSelector_ReconnectResetsBreaker(t *testing.T) {
 	s.UpdateL1("egB", 200, 0.2, 5, now)
 
 	// 连续失败把 egA 熔断
-	// ★ 现在是「采样与判定分离」✅✅ ⇒ 需要推进到判定 ✅✅
+	// ★ 现在是「采样与判定分离」⇒ 需要推进到判定
 	tripBreaker(t, s, "egA", now)
 	if st, _ := s.breakers["egA"].State(now); st != "熔断" {
 		t.Fatalf("egA 应处于熔断，实际 %q", st)
@@ -202,16 +202,16 @@ func TestSelector_BreakerReasonSurfaced(t *testing.T) {
 // L1 探测每 2 秒就成功一次；如果成功就清空原因，
 // L2 探测记录的原因会被立刻抹掉，状态页就永远看不到「连不上 1.1.1.1」。
 //
-// ★ 注意现在的语义 ✅✅：
+// ★ 注意现在的语义 ：
 //
-//	采样与判定是分开的 ✅✅ ⇒ 失败要先经过一次「判定」才会记进熔断器 ✅✅
-//	⇒ 测试要把时间推进一个判定间隔（30 秒 ✅✅）才能触发判定 ✅✅
+//	采样与判定是分开的 ⇒ 失败要先经过一次「判定」才会记进熔断器
+//	⇒ 测试要把时间推进一个判定间隔（30 秒 ）才能触发判定
 func TestSelector_ReasonKeptAcrossSuccess(t *testing.T) {
 	s := NewSelector(DefaultWeights())
 	now := time.Now()
 	const reason = "L2 连不上 1.1.1.1（超时）"
-	// ★ 失败要先经过一次「判定」才会记进熔断器 ✅✅
-	// ⇒ 推进到判定点（第一次判定失败 ✅✅）
+	// ★ 失败要先经过一次「判定」才会记进熔断器
+	// ⇒ 推进到判定点（第一次判定失败 ）
 	step := healthJudgeInterval / 2
 	s.ReportHealthWithReason("egA", false, reason, now)
 	s.ReportHealthWithReason("egA", false, reason, now.Add(step))
@@ -219,7 +219,7 @@ func TestSelector_ReasonKeptAcrossSuccess(t *testing.T) {
 	if got := s.breakers["egA"].Reason(); got != reason {
 		t.Fatalf("判定失败后应记住原因，实际 %q", got)
 	}
-	// 再来一次成功 ⇒ 原因仍在 ✅✅
+	// 再来一次成功 ⇒ 原因仍在
 	s.ReportHealthWithReason("egA", true, "", now.Add(3*step))
 	if got := s.breakers["egA"].Reason(); got != reason {
 		t.Fatalf("成功不应抹掉最近一次失败原因，实际 %q", got)

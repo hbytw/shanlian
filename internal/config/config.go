@@ -559,18 +559,18 @@ const (
 //
 // 优先级：环境变量 > YAML > 默认 auto。
 //
-// ★ 为什么默认 auto ✅✅：
+// ★ 为什么默认 auto ：
 //
-//	auto = 按通道评分自动选（TLS 直连与 ZT 兜底都参与竞选 ✅✅）
-//	zt   = 只走 ZeroTier ⇒ **ZT 不通就彻底没有出口** ✅⚠️
-//	⇒ auto 是**能力超集** ✅✅：ZT 通就可能选 ZT，ZT 不通就选 TLS ✅✅
-//	⇒ 对「只开了 TLS 直连」「只开了 ZT」「两个都开」的 agent 都成立 ✅✅
+//	auto = 按通道评分自动选（TLS 直连与 ZT 兜底都参与竞选 ）
+//	zt   = 只走 ZeroTier ⇒ **ZT 不通就彻底没有出口**
+//	⇒ auto 是**能力超集** ：ZT 通就可能选 ZT，ZT 不通就选 TLS
+//	⇒ 对「只开了 TLS 直连」「只开了 ZT」「两个都开」的 agent 都成立
 //
-// ★ 为什么非法取值回落到 auto（而不是 zt）✅✅：
+// ★ 为什么非法取值回落到 auto（而不是 zt）：
 //
-//	「宁可保守，也别因为一个错字把网络搞挂」✅✅
-//	⇒ 但 zt 并不是保守 —— 它把「没有 ZT 就没出口」这个风险变成了默认 ✅⚠️
-//	⇒ auto 才是真正的保守：**两种通道都能用** ✅✅
+//	「宁可保守，也别因为一个错字把网络搞挂」
+//	⇒ 但 zt 并不是保守 —— 它把「没有 ZT 就没出口」这个风险变成了默认
+//	⇒ auto 才是真正的保守：**两种通道都能用**
 func (c *Config) EffRelayTransport() string {
 	v := strings.TrimSpace(os.Getenv(EnvRelayTransport))
 	if v == "" {
@@ -584,7 +584,7 @@ func (c *Config) EffRelayTransport() string {
 	case RelayTransportAuto:
 		return RelayTransportAuto
 	default:
-		// 非法取值（含未配置）⇒ auto ✅✅
+		// 非法取值（含未配置）⇒ auto
 		return RelayTransportAuto
 	}
 }

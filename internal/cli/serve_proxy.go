@@ -177,7 +177,7 @@ func serveProxy(
 				"write_err", werr,
 				"tcp_ok", ns.TCPAccepted,
 				"tcp_fail", ns.TCPFailed,
-				// ★ 失败要分类，否则线上看到一个 tcp_fail 涨了根本不知道查哪 ✅✅
+				// ★ 失败要分类，否则线上看到一个 tcp_fail 涨了根本不知道查哪
 				"tcp_fail_conn", ns.TCPFailConnect,
 				"tcp_fail_ep", ns.TCPFailEndpoint,
 				"tcp_fail_lim", ns.TCPFailLimit,
@@ -458,8 +458,8 @@ func startProxyDNS(ctx context.Context, log *slog.Logger, c *config.Config,
 		return cnLoaded
 	}
 
-	// ★ 用 UsableAgentIDs：排除「在线但一条通道都不剩」的黑洞代理 ✅✅
-	//   （2026-11-12 审计新增 ✅⚠️ —— 见 relay.UsableAgentIDs 的说明 ✅✅）
+	// ★ 用 UsableAgentIDs：排除「在线但一条通道都不剩」的黑洞代理
+	//   （2026-11-12 审计新增  —— 见 relay.UsableAgentIDs 的说明 ）
 	cands := func() []string { return pp.gateway.UsableAgentIDs() }
 	pol := newDNSPolicy(log, pp.picker, nodeID, cnNets, cands)
 

@@ -87,15 +87,15 @@ type proxyConnector struct {
 // 发现表只在「有记录时」用于补充评分（picker 的 L1 指标来自它），
 // 不作为是否可用的判据。
 func (c *proxyConnector) candidates() []string {
-	// ★ 用 UsableAgentIDs 而不是 AgentIDs ✅✅
+	// ★ 用 UsableAgentIDs 而不是 AgentIDs
 	//
-	// 「在线」≠「能用」✅✅
-	// 一台 agent 的通道可能全被熔断或正在重建 ✅✅
-	// ⇒ 它仍在 AgentIDs 里、评分仍然很高 ✅⚠️
-	// ⇒ 但每条连接都会失败 ⇒ 它是个黑洞代理 ✅⚠️
+	// 「在线」≠「能用」
+	// 一台 agent 的通道可能全被熔断或正在重建
+	// ⇒ 它仍在 AgentIDs 里、评分仍然很高
+	// ⇒ 但每条连接都会失败 ⇒ 它是个黑洞代理
 	//
-	// ⇒ 把它们排除出候选集 ✅✅
-	//   （2026-11-12 审计新增 ✅⚠️）
+	// ⇒ 把它们排除出候选集
+	//   （2026-11-12 审计新增 ）
 	agents := c.gw.UsableAgentIDs()
 	if len(agents) == 0 {
 		return nil

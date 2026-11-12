@@ -165,7 +165,7 @@ type channelBreaker struct {
 
 // channelBreakerCooldownBase 是通道级熔断的首次冷却时间。
 //
-// 60 秒起步，每次熔断翻倍，maxChannelCooldown 封顶 ✅✅
+// 60 秒起步，每次熔断翻倍，maxChannelCooldown 封顶
 const channelBreakerCooldownBase = 60 * time.Second
 
 func newChannelBreaker() *channelBreaker {
@@ -196,31 +196,31 @@ func (b *channelBreaker) Allow(now time.Time) bool {
 
 // Record 记录一次探测结果。
 //
-// # ★ open 状态下的一次成功，不该关闭熔断 ✅✅
+// # ★ open 状态下的一次成功，不该关闭熔断
 //
-// 这是 2026-11-12 审计的同源问题 ✅⚠️（agent 级熔断器已修，这里一并修 ✅✅）
+// 这是 2026-11-12 审计的同源问题 （agent 级熔断器已修，这里一并修 ）
 //
-// 通道探测每 15 秒一次 ⇒ 只要通道有一点通，success 就会不停到来 ✅⚠️
-// ⇒ 原来的写法每次 success 都清零 failures、关掉 open ✅⚠️
-// ⇒ ⇒ **指数退避（60→120→240…）永远升不上去** ✅⚠️
-// ⇒ ⇒ 一个时好时坏的通道，每次都只享受 60 秒冷却 ✅⚠️
+// 通道探测每 15 秒一次 ⇒ 只要通道有一点通，success 就会不停到来
+// ⇒ 原来的写法每次 success 都清零 failures、关掉 open
+// ⇒ ⇒ **指数退避（60→120→240…）永远升不上去**
+// ⇒ ⇒ 一个时好时坏的通道，每次都只享受 60 秒冷却
 //
 // ⇒ 现在：★★
 //
-//	open 状态下的一次成功：只清失败计数，**不关闭、不重置退避** ✅✅
-//	                  ⇒ 冷却期真正生效 ✅✅
-//	半开状态下的一次成功：试探通过 ⇒ 真恢复 ⇒ 关闭并重置退避 ✅✅
+//	open 状态下的一次成功：只清失败计数，**不关闭、不重置退避**
+//	                  ⇒ 冷却期真正生效
+//	半开状态下的一次成功：试探通过 ⇒ 真恢复 ⇒ 关闭并重置退避
 func (b *channelBreaker) Record(ok bool, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if ok {
 		if b.open {
-			// ★ 还在冷却期 ⇒ 一次成功不算恢复 ✅✅
-			//   保持 open、保持退避计数与冷却时长 ✅✅
+			// ★ 还在冷却期 ⇒ 一次成功不算恢复
+			//   保持 open、保持退避计数与冷却时长
 			return
 		}
 		if b.failures > 0 && b.failures >= b.threshold-1 {
-			// 半开试探通过 ⇒ 真的恢复了 ⇒ 清空并重置退避 ✅✅
+			// 半开试探通过 ⇒ 真的恢复了 ⇒ 清空并重置退避
 			b.failures = 0
 			b.cooldown = channelBreakerCooldownBase
 			b.until = time.Time{}
@@ -491,27 +491,27 @@ func (s *agentSession) selectChannel(now time.Time, mode string) *channel {
 	return s.selectChannelLocked(now, mode, true)
 }
 
-// selectChannelNoSideEffect 与 selectChannel 相同，但**不写 s.primary** ✅✅
+// selectChannelNoSideEffect 与 selectChannel 相同，但**不写 s.primary**
 //
-// 用途：探测这类「只想知道当前主通道是谁」的只读场景 ✅✅
+// 用途：探测这类「只想知道当前主通道是谁」的只读场景
 //
-// ★ 为什么要单独一个 ✅✅：
+// ★ 为什么要单独一个 ：
 //
-//	selectChannel 会把选出的通道写进 s.primary ✅⚠️
+//	selectChannel 会把选出的通道写进 s.primary
 //	⇒ 探测路径调它 ⇒ 在 tls/zt 模式下会把**全局业务主通道**
-//	  改写成该模式下评分最高的通道 ✅⚠️
-//	⇒ 业务本该走 ZT，探测一跑就改走 TLS ✅⚠️
+//	  改写成该模式下评分最高的通道
+//	⇒ 业务本该走 ZT，探测一跑就改走 TLS
 //
-// ★ 注意：它返回的是「按同样规则算出来、但不落盘」的那条 ✅✅
+// ★ 注意：它返回的是「按同样规则算出来、但不落盘」的那条
 //
-//	滞回逻辑与 selectChannel 完全一致 ✅✅
+//	滞回逻辑与 selectChannel 完全一致
 func (s *agentSession) selectChannelNoSideEffect(now time.Time, mode string) *channel {
 	return s.selectChannelLocked(now, mode, false)
 }
 
 // selectChannelLocked 是 selectChannel 的实现。
 //
-// commit=false 时**不写 s.primary** ✅✅ —— 只读场景用 ✅✅
+// commit=false 时**不写 s.primary** —— 只读场景用
 func (s *agentSession) selectChannelLocked(now time.Time, mode string, commit bool) *channel {
 	s.chMu.Lock()
 	defer s.chMu.Unlock()
@@ -1138,40 +1138,40 @@ func (s *agentSession) candidatesFor(dst string, now time.Time, mode string) []*
 	return out
 }
 
-// pickProbeChannel 为探测选一条通道 ✅✅
+// pickProbeChannel 为探测选一条通道
 //
-// ★ 为什么探测要避开业务主通道 ✅✅（审计「第 3 批 #14」）：
+// ★ 为什么探测要避开业务主通道 （审计「第 3 批 #14」）：
 //
-//	探测与业务流量共用同一个 yamux 会话 ⇒ **共享同一条 TCP 的拥塞窗口** ✅⚠️
-//	⇒ 一条几 MB 的业务传输能把窗口占满 ✅⚠️
-//	⇒ 探测的小请求排在它后面 ⇒ 探测超时 ✅⚠️
-//	⇒ 而此时通道其实好得很 ✅✅（只是被数据挤了 ✅⚠️）
-//	⇒ 探测超时会被当成「出口链路失败」⇒ **误杀好出口 ⇒ 熔断级联** ✅⚠️ ✅ ✅
+//	探测与业务流量共用同一个 yamux 会话 ⇒ **共享同一条 TCP 的拥塞窗口**
+//	⇒ 一条几 MB 的业务传输能把窗口占满
+//	⇒ 探测的小请求排在它后面 ⇒ 探测超时
+//	⇒ 而此时通道其实好得很 （只是被数据挤了 ）
+//	⇒ 探测超时会被当成「出口链路失败」⇒ **误杀好出口 ⇒ 熔断级联**
 //
-// ⇒ 所以探测优先选：**不是**业务主通道、且在途流最少的那条 ✅✅
+// ⇒ 所以探测优先选：**不是**业务主通道、且在途流最少的那条
 //
-// ★ 退化情况 ✅✅：只有一条通道时仍然用它 ✅✅
+// ★ 退化情况 ：只有一条通道时仍然用它
 //
-//	（总不能让「没别的通道」变成「不探测」——那更糟 ✅⚠️）
+//	（总不能让「没别的通道」变成「不探测」——那更糟 ）
 func (s *agentSession) pickProbeChannel(now time.Time, mode string) *channel {
-	// ★ 排除的是**全局业务主通道** s.primary ✅✅
+	// ★ 排除的是**全局业务主通道** s.primary
 	//
-	// ★ 为什么不是 selectChannel(now, mode) ✅✅：
-	//   ① selectChannel **会写 s.primary**（业务主通道）✅⚠️
-	//      ⇒ 探测这个「看起来只读」的路径，却改了业务路由 ✅⚠️
-	//      ⇒ 在 tls/zt 模式下，它会把全局业务主通道改写成该模式下评分最高的 ✅⚠️
-	//   ② 它按 mode 过滤后选出来的那条，**未必是承载业务的那条** ✅⚠️
-	//      ⇒ 业务走 ZT、探测按 tls 选 ⇒ 排除的是 TLS 那条 ✅⚠️
-	//      ⇒ 探测照样会打到 ZT 上 ⇒ **"与业务错开"的目标落空** ✅⚠️
+	// ★ 为什么不是 selectChannel(now, mode) ：
+	//   ① selectChannel **会写 s.primary**（业务主通道）
+	//      ⇒ 探测这个「看起来只读」的路径，却改了业务路由
+	//      ⇒ 在 tls/zt 模式下，它会把全局业务主通道改写成该模式下评分最高的
+	//   ② 它按 mode 过滤后选出来的那条，**未必是承载业务的那条**
+	//      ⇒ 业务走 ZT、探测按 tls 选 ⇒ 排除的是 TLS 那条
+	//      ⇒ 探测照样会打到 ZT 上 ⇒ **"与业务错开"的目标落空**
 	//
-	// ⇒ 正确做法：★ 排除全局业务主通道 s.primary ✅✅
-	//   它才是真正承载业务流量的那条 ✅✅
+	// ⇒ 正确做法：★ 排除全局业务主通道 s.primary
+	//   它才是真正承载业务流量的那条
 	s.chMu.Lock()
 	businessPrimary := s.primary
 	s.chMu.Unlock()
 
 	if businessPrimary == nil {
-		// 还没有主通道（首次选路）⇒ 退化成按模式选一条 ✅✅
+		// 还没有主通道（首次选路）⇒ 退化成按模式选一条
 		if p := s.selectChannelNoSideEffect(now, mode); p != nil {
 			return p
 		}
@@ -1193,11 +1193,11 @@ func (s *agentSession) pickProbeChannel(now time.Time, mode string) *channel {
 				continue
 			}
 		}
-		// 第一步：先排除业务主通道 ✅✅
+		// 第一步：先排除业务主通道
 		if c == businessPrimary {
 			continue
 		}
-		// 第二步：在剩下的里挑在途流最少的 ✅✅
+		// 第二步：在剩下的里挑在途流最少的
 		if best == nil || c.inflight.Load() < best.inflight.Load() {
 			best = c
 		}
@@ -1205,8 +1205,8 @@ func (s *agentSession) pickProbeChannel(now time.Time, mode string) *channel {
 	if best != nil {
 		return best
 	}
-	// ★ 只有业务主通道可用 ⇒ 退化用它 ✅✅
-	//   （总不能让「没别的通道」变成「不探测」——那更糟 ✅⚠️）
+	// ★ 只有业务主通道可用 ⇒ 退化用它
+	//   （总不能让「没别的通道」变成「不探测」——那更糟 ）
 	return businessPrimary
 }
 

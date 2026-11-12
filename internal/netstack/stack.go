@@ -47,15 +47,15 @@ const nicID = 1
 
 // channelQueue 是 channel 端点缓存的出站包数量。
 //
-// ★ 为什么从 256 提到 1024 ✅✅：
+// ★ 为什么从 256 提到 1024 ：
 //
-//	这条队列是 gvisor 的**出站**包缓冲 ✅✅
-//	⇒ 突发时（并发拉取、页面一次开几十个连接）队列一满就**丢包** ✅⚠️
-//	⇒ 丢掉的如果是 SYN-ACK ⇒ 客户端要重传 ⇒ 表现为「偶尔卡一下」✅⚠️
+//	这条队列是 gvisor 的**出站**包缓冲
+//	⇒ 突发时（并发拉取、页面一次开几十个连接）队列一满就**丢包**
+//	⇒ 丢掉的如果是 SYN-ACK ⇒ 客户端要重传 ⇒ 表现为「偶尔卡一下」
 //
-// 内存代价 ✅✅：1024 × MTU(1380) ≈ 1.4 MB 最坏情况 ✅✅
+// 内存代价 ：1024 × MTU(1380) ≈ 1.4 MB 最坏情况
 //
-//	（队列按需增长，不是预分配 ✅✅）
+//	（队列按需增长，不是预分配 ）
 const channelQueue = 1024
 
 // maxInFlight 是 gvisor TCP forwarder 允许同时在途的握手数量。
@@ -63,22 +63,22 @@ const channelQueue = 1024
 // 超过后新 SYN 会被丢弃（不是拒绝），客户端会重传 —— 属于过载保护，
 // 避免被 SYN 洪水打爆内存。
 //
-// ★ 它只管「握手」，不管「已建立的连接」——后者由 maxActiveTCP 管 ✅✅
+// ★ 它只管「握手」，不管「已建立的连接」——后者由 maxActiveTCP 管
 const maxInFlight = 1024
 
 // defaultMaxActiveTCP 是同时中继的 TCP 连接数默认上限。
 //
-// 为什么需要它 ✅✅：
+// 为什么需要它 ：
 //
-//	gvisor 的 maxInFlight（1024）只限制**握手**在途数 ✅✅
-//	⇒ 握手成功后每条连接都留着一个中继 goroutine + 一条 yamux 流 ✅⚠️
+//	gvisor 的 maxInFlight（1024）只限制**握手**在途数
+//	⇒ 握手成功后每条连接都留着一个中继 goroutine + 一条 yamux 流
 //	⇒ 突发连接（爬虫、下载器、并发拉取）能把 goroutine 数、
-//	  yamux 在途流位、出口连接数一起打满 ✅⚠️
-//	⇒ 后面来的正常流量被挤掉，表现为「越忙越慢、最后全超时」✅⚠️
+//	  yamux 在途流位、出口连接数一起打满
+//	⇒ 后面来的正常流量被挤掉，表现为「越忙越慢、最后全超时」
 //
-// 为什么是 512 ✅✅：
-//   - 家用场景正常浏览也就几十条并发 ✅✅
-//   - 512 远低于「把路由器内存打爆」的数量级 ✅✅
+// 为什么是 512 ：
+//   - 家用场景正常浏览也就几十条并发
+//   - 512 远低于「把路由器内存打爆」的数量级
 const defaultMaxActiveTCP = 512
 
 // Connector 由网关侧实现：把「去往 dst:port 的连接」落到某个出口 agent。
@@ -115,16 +115,16 @@ type Options struct {
 
 	// MaxActiveTCP 是同时中继的 TCP 连接数上限（0 = 默认 512）。
 	//
-	// 为什么需要它 ✅✅：
-	//   gvisor 的 maxInFlight（1024）只限制**握手**在途数 ✅✅
-	//   ⇒ 握手成功后每条连接都留着一个中继 goroutine ✅⚠️
+	// 为什么需要它 ：
+	//   gvisor 的 maxInFlight（1024）只限制**握手**在途数
+	//   ⇒ 握手成功后每条连接都留着一个中继 goroutine
 	//   ⇒ 突发连接（爬虫、下载器、并发拉取）可以把 goroutine 数、
-	//     yamux 在途流位、出口连接数一起打满 ✅⚠️
-	//   ⇒ 后面来的正常流量被挤掉，表现为「越忙越慢、最后全超时」✅⚠️
+	//     yamux 在途流位、出口连接数一起打满
+	//   ⇒ 后面来的正常流量被挤掉，表现为「越忙越慢、最后全超时」
 	//
-	// 超限时的行为 ✅✅：**回 RST** ✅✅
-	//   ⇒ 客户端立刻失败并换源端口重试 ✅✅
-	//   ⇒ 比「静默丢弃」好：静默丢弃会让客户端一直等到超时 ✅⚠️
+	// 超限时的行为 ：**回 RST**
+	//   ⇒ 客户端立刻失败并换源端口重试
+	//   ⇒ 比「静默丢弃」好：静默丢弃会让客户端一直等到超时
 	MaxActiveTCP int
 }
 
@@ -169,14 +169,14 @@ type Stack struct {
 	tcpActive atomic.Int64
 	// tcpFailConnect / tcpFailEndpoint / tcpFailLimit 把 TCP 失败拆开归因。
 	//
-	// 为什么必须拆开 ✅✅：以前只有一个 tcpFailed ⚠️
+	// 为什么必须拆开 ：以前只有一个 tcpFailed
 	//   ⇒ 「出口连不上」「协议栈起不来端点」「并发超限」三种完全不同的事
-	//     混在一个数字里 ⚠️
-	//   ⇒ 线上看到 tcpFail 涨了根本不知道该查哪里 ✅⚠️
-	//   ⇒ 而这三者的处置完全不同 ✅✅：
-	//     connect  ⇒ 查出口/选路 ✅✅
-	//     endpoint ⇒ 查协议栈 ✅✅
-	//     limit    ⇒ 查并发/正常负载高峰 ✅✅
+	//     混在一个数字里
+	//   ⇒ 线上看到 tcpFail 涨了根本不知道该查哪里
+	//   ⇒ 而这三者的处置完全不同 ：
+	//     connect  ⇒ 查出口/选路
+	//     endpoint ⇒ 查协议栈
+	//     limit    ⇒ 查并发/正常负载高峰
 	tcpFailConnect  atomic.Int64
 	tcpFailEndpoint atomic.Int64
 	tcpFailLimit    atomic.Int64
@@ -200,7 +200,7 @@ type Stats struct {
 	UDPDropped int64
 
 	// TCPFailConnect / TCPFailEndpoint / TCPFailLimit 是 TCP 失败的分类归因。
-	// 三者之和等于 TCPFailed ✅✅。
+	// 三者之和等于 TCPFailed 。
 	TCPFailConnect  int64
 	TCPFailEndpoint int64
 	TCPFailLimit    int64
@@ -249,14 +249,14 @@ func New(o Options) (*Stack, error) {
 			ipv6.NewProtocol,
 		},
 		TransportProtocols: []stack.TransportProtocolFactory{
-			// ★ 用 CUBIC 而不是默认的 Reno ✅✅
+			// ★ 用 CUBIC 而不是默认的 Reno
 			//
-			// 为什么 ✅✅：跨境链路是**高 BDP**（大带宽 × 长延迟）✅✅
-			//   Reno 在高 BDP 上窗口增长很慢 ⇒ 长期跑不满带宽 ✅⚠️
-			//   CUBIC 按 cubic 函数增长窗口 ⇒ 在高 BDP 上明显更快 ✅✅
+			// 为什么 ：跨境链路是**高 BDP**（大带宽 × 长延迟）
+			//   Reno 在高 BDP 上窗口增长很慢 ⇒ 长期跑不满带宽
+			//   CUBIC 按 cubic 函数增长窗口 ⇒ 在高 BDP 上明显更快
 			//
-			// 实测背景 ✅✅：原始 TCP 44.4 Mbps，SLX 端到端只有 16.9 Mbps ✅⚠️
-			//   ⇒ 这段差距很可能就出在拥塞控制上 ✅✅
+			// 实测背景 ：原始 TCP 44.4 Mbps，SLX 端到端只有 16.9 Mbps
+			//   ⇒ 这段差距很可能就出在拥塞控制上
 			tcp.NewProtocolCUBIC,
 			udp.NewProtocol,
 		},
@@ -291,10 +291,10 @@ func New(o Options) (*Stack, error) {
 
 	// TCP 转发器：每个 SYN 触发一次回调，由我们决定连到哪个出口。
 	//
-	// ★ 这里要包一层 ✅✅：gvisor 的 NewForwarder 要的是
-	//   func(*tcp.ForwarderRequest) 这个**精确签名** ✅⚠️
-	//   而 handleTCP 收的是 tcpRequest 接口 ✅✅（为了可测 ✅✅）
-	//   ⇒ 不包一层就编译不过 ✅⚠️
+	// ★ 这里要包一层 ：gvisor 的 NewForwarder 要的是
+	//   func(*tcp.ForwarderRequest) 这个**精确签名**
+	//   而 handleTCP 收的是 tcpRequest 接口 （为了可测 ）
+	//   ⇒ 不包一层就编译不过
 	tcpFwd := tcp.NewForwarder(stk, 0, maxInFlight, func(req *tcp.ForwarderRequest) {
 		s.handleTCP(req)
 	})
@@ -390,14 +390,14 @@ func (s *Stack) Close() {
 	s.waitUDPFlows(udpCloseWait)
 }
 
-// tcpRequest 是 handleTCP 需要的最小接口 ✅✅
+// tcpRequest 是 handleTCP 需要的最小接口
 //
-// 为什么要抽这一层 ✅✅：
+// 为什么要抽这一层 ：
 //
-//	gvisor 的 tcp.ForwarderRequest 没有公开构造器 ✅⚠️
-//	⇒ 直接测 handleTCP 只能靠造真实 TCP 包打进协议栈 ✅⚠️（慢且脆 ✅⚠️）
-//	⇒ 抽一个薄接口后，测试可以直接喂假请求 ✅✅
-//	⇒ *tcp.ForwarderRequest 天然满足它 ✅✅（不用改 gvisor ✅✅）
+//	gvisor 的 tcp.ForwarderRequest 没有公开构造器
+//	⇒ 直接测 handleTCP 只能靠造真实 TCP 包打进协议栈 （慢且脆 ）
+//	⇒ 抽一个薄接口后，测试可以直接喂假请求
+//	⇒ *tcp.ForwarderRequest 天然满足它 （不用改 gvisor ）
 type tcpRequest interface {
 	ID() stack.TransportEndpointID
 	Complete(sendReset bool)
@@ -414,9 +414,9 @@ func (s *Stack) handleTCP(req tcpRequest) {
 	port := id.LocalPort
 	addr := net.IP(id.LocalAddress.AsSlice())
 
-	// ★ 并发闸门 ✅✅
-	// 先占位再干活：超限直接 RST，让客户端立刻换端口重试 ✅✅
-	// （静默丢弃的话客户端会一直等到超时 ✅⚠️ —— 那比拒绝更糟 ✅✅）
+	// ★ 并发闸门
+	// 先占位再干活：超限直接 RST，让客户端立刻换端口重试
+	// （静默丢弃的话客户端会一直等到超时  —— 那比拒绝更糟 ）
 	if n := s.tcpActive.Add(1); n > s.maxActiveTCP {
 		s.tcpActive.Add(-1)
 		s.tcpFailLimit.Add(1)
@@ -463,7 +463,7 @@ func (s *Stack) handleTCP(req tcpRequest) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		// 计数在这里还回去：中继结束 = 这条连接不再占资源 ✅✅
+		// 计数在这里还回去：中继结束 = 这条连接不再占资源
 		defer s.tcpActive.Add(-1)
 		relayBothCounted(local, conn, &s.tcpBytes)
 	}()
@@ -495,14 +495,14 @@ func relayBoth(a, b net.Conn) {
 	<-done
 }
 
-// relayBothCounted 是 relayBoth 的带计数版本 ✅✅
+// relayBothCounted 是 relayBoth 的带计数版本
 //
-// 为什么要计字节 ✅✅：
+// 为什么要计字节 ：
 //
-//	之前只有「连接数」和「失败数」✅⚠️
-//	⇒ 线上只能看到「连了多少条」，看不到「搬了多少数据」✅⚠️
-//	⇒ 排查「是不是真的在走代理」「带宽打在哪条流上」时毫无抓手 ✅⚠️
-//	⇒ 字节数是判断「流量到底有没有走代理」最直接的证据 ✅✅
+//	之前只有「连接数」和「失败数」
+//	⇒ 线上只能看到「连了多少条」，看不到「搬了多少数据」
+//	⇒ 排查「是不是真的在走代理」「带宽打在哪条流上」时毫无抓手
+//	⇒ 字节数是判断「流量到底有没有走代理」最直接的证据
 func relayBothCounted(a, b net.Conn, counter *atomic.Int64) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {

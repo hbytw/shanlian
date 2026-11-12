@@ -335,14 +335,14 @@ func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
 	if !ok {
 		reason = "L1 出口链路" + probeErrPhrase(err)
 	}
-	// ★ 链路信号走 ReportLinkHealth，**不推进熔断计数** ✅✅
+	// ★ 链路信号走 ReportLinkHealth，**不推进熔断计数**
 	//
-	// 原因见 picker.ReportLinkHealth 的说明 ✅✅
-	//   L1 每 2 秒就成功一次（链路本来就通）✅✅
-	//   ⇒ 若把它和业务结果混在一个成功率窗口里 ✅⚠️
-	//   ⇒ 业务失败会被稀释 ⇒ 出口真的坏了也判不出来 ✅⚠️
+	// 原因见 picker.ReportLinkHealth 的说明
+	//   L1 每 2 秒就成功一次（链路本来就通）
+	//   ⇒ 若把它和业务结果混在一个成功率窗口里
+	//   ⇒ 业务失败会被稀释 ⇒ 出口真的坏了也判不出来
 	//
-	// 链路易断的后果由丢包率 → 评分体现 ✅✅；熔断只认业务持续失败 ✅✅
+	// 链路易断的后果由丢包率 → 评分体现 ；熔断只认业务持续失败
 	sel.ReportLinkHealth(id, ok, reason, now)
 
 	if !ok {

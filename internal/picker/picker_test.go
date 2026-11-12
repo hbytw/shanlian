@@ -351,7 +351,7 @@ func TestSelector_BreakerExcludesEgress(t *testing.T) {
 	s.UpdateL1("egB", 200, 0.2, 5, now)
 
 	// 把 egA 熔断
-	// ★ 采样与判定分离 ⇒ 需要推进到判定 ✅✅
+	// ★ 采样与判定分离 ⇒ 需要推进到判定
 	tripBreaker(t, s, "egA", now)
 
 	d := s.Pick(net.ParseIP("1.2.3.4"), "", []string{"egA", "egB"}, now)

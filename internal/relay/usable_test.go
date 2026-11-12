@@ -7,15 +7,15 @@ import (
 
 // —— 2026-11-12 审计：黑洞代理 ——
 //
-// 「agent 在线」≠「agent 能用」✅✅
+// 「agent 在线」≠「agent 能用」
 //
-// 一台 agent 的通道可能全被熔断（冷却中）或正在重建 ✅✅
-// ⇒ 它仍在 AgentIDs 里、评分仍然很高 ✅⚠️
-// ⇒ 但每条连接都会失败 ⇒ 它是个黑洞代理 ✅⚠️
+// 一台 agent 的通道可能全被熔断（冷却中）或正在重建
+// ⇒ 它仍在 AgentIDs 里、评分仍然很高
+// ⇒ 但每条连接都会失败 ⇒ 它是个黑洞代理
 //
-// ⇒ UsableAgentIDs 把它们排除 ✅✅
+// ⇒ UsableAgentIDs 把它们排除
 
-// newTestChannel 造一条指定状态的通道 ✅✅
+// newTestChannel 造一条指定状态的通道
 func newTestChannel(kind ChannelKind, closed bool) *channel {
 	c := &channel{kind: kind, breaker: newChannelBreaker()}
 	if closed {
@@ -24,13 +24,13 @@ func newTestChannel(kind ChannelKind, closed bool) *channel {
 	return c
 }
 
-// TestUsableAgentIDs_ExcludesChannelLessAgents 验证通道全没的 agent 被排除 ✅✅
+// TestUsableAgentIDs_ExcludesChannelLessAgents 验证通道全没的 agent 被排除
 func TestUsableAgentIDs_ExcludesChannelLessAgents(t *testing.T) {
 	g := &Gateway{agents: map[string]*agentSession{}}
 
-	// 一台有可用通道的 ✅✅
+	// 一台有可用通道的
 	ok := &agentSession{chans: []*channel{newTestChannel(ChannelZT, false)}}
-	// 一台通道已关闭的（unusable ✅✅）
+	// 一台通道已关闭的（unusable ）
 	dead := &agentSession{chans: []*channel{newTestChannel(ChannelZT, true)}}
 
 	g.agents["eg-good"] = ok
@@ -48,12 +48,12 @@ func TestUsableAgentIDs_ExcludesChannelLessAgents(t *testing.T) {
 	}
 }
 
-// TestUsableAgentIDs_ChannelBreakerOpenIsUnusable 验证通道熔断中的 agent 被排除 ✅✅
+// TestUsableAgentIDs_ChannelBreakerOpenIsUnusable 验证通道熔断中的 agent 被排除
 func TestUsableAgentIDs_ChannelBreakerOpenIsUnusable(t *testing.T) {
 	g := &Gateway{agents: map[string]*agentSession{}}
 
 	c := newTestChannel(ChannelZT, false)
-	// 让通道级熔断器打开 ✅✅（要连续 threshold 次失败 ✅✅）
+	// 让通道级熔断器打开 （要连续 threshold 次失败 ）
 	for i := 0; i < c.breaker.threshold; i++ {
 		c.breaker.Record(false, time.Now())
 	}
@@ -68,7 +68,7 @@ func TestUsableAgentIDs_ChannelBreakerOpenIsUnusable(t *testing.T) {
 	}
 }
 
-// TestUsableAgentIDs_UnknownAgent 验证未知 agent 不被误认为可用 ✅✅
+// TestUsableAgentIDs_UnknownAgent 验证未知 agent 不被误认为可用
 func TestUsableAgentIDs_UnknownAgent(t *testing.T) {
 	g := &Gateway{agents: map[string]*agentSession{}}
 	if g.HasUsableChannel("nope") {
@@ -79,7 +79,7 @@ func TestUsableAgentIDs_UnknownAgent(t *testing.T) {
 	}
 }
 
-// TestUsableAgentIDs_NoChannelAtAll 验证一条通道都没有的 agent 也被排除 ✅✅
+// TestUsableAgentIDs_NoChannelAtAll 验证一条通道都没有的 agent 也被排除
 func TestUsableAgentIDs_NoChannelAtAll(t *testing.T) {
 	g := &Gateway{agents: map[string]*agentSession{}}
 	g.agents["eg-none"] = &agentSession{}
@@ -88,17 +88,17 @@ func TestUsableAgentIDs_NoChannelAtAll(t *testing.T) {
 	}
 }
 
-// TestChannelBreaker_BackoffEscalates 验证通道级熔断的指数退避能升上去 ✅✅
+// TestChannelBreaker_BackoffEscalates 验证通道级熔断的指数退避能升上去
 //
-// ★ 2026-11-12 审计的同源问题 ✅⚠️
+// ★ 2026-11-12 审计的同源问题
 //
 // 通道探测每 15 秒成功一次 ⇒ 原来的写法每次 success 都清零 ⇒
-// 退避永远是 60 秒 ✅⚠️
+// 退避永远是 60 秒
 func TestChannelBreaker_BackoffEscalates(t *testing.T) {
 	b := newChannelBreaker()
 	now := time.Now()
 
-	// 连续失败到熔断 ✅✅
+	// 连续失败到熔断
 	for i := 0; i < b.threshold; i++ {
 		b.Record(false, now)
 	}
@@ -109,7 +109,7 @@ func TestChannelBreaker_BackoffEscalates(t *testing.T) {
 		t.Fatalf("首次熔断后冷却应已翻倍（为下一次准备），实际 %s", b.cooldown)
 	}
 
-	// ★ open 态的一次成功不该关闭，也不该重置退避 ✅✅
+	// ★ open 态的一次成功不该关闭，也不该重置退避
 	base := b.cooldown
 	b.Record(true, now.Add(time.Second))
 	if !b.open {
@@ -119,12 +119,12 @@ func TestChannelBreaker_BackoffEscalates(t *testing.T) {
 		t.Fatalf("open 态的成功不该重置退避，实际 %s（期望 %s）", b.cooldown, base)
 	}
 
-	// 冷却走完 → 半开 ✅✅
+	// 冷却走完 → 半开
 	after := now.Add(2 * time.Minute)
 	if !b.Allow(after) {
 		t.Fatal("冷却过后应当放行试探")
 	}
-	// 试探失败 ⇒ 重新熔断，冷却继续翻倍 ✅✅
+	// 试探失败 ⇒ 重新熔断，冷却继续翻倍
 	before := b.cooldown
 	b.Record(false, after)
 	if b.cooldown <= before {
@@ -132,7 +132,7 @@ func TestChannelBreaker_BackoffEscalates(t *testing.T) {
 	}
 }
 
-// TestChannelBreaker_HalfOpenSuccessResetsBackoff 验证半开试探成功才重置退避 ✅✅
+// TestChannelBreaker_HalfOpenSuccessResetsBackoff 验证半开试探成功才重置退避
 func TestChannelBreaker_HalfOpenSuccessResetsBackoff(t *testing.T) {
 	b := newChannelBreaker()
 	now := time.Now()
@@ -140,12 +140,12 @@ func TestChannelBreaker_HalfOpenSuccessResetsBackoff(t *testing.T) {
 	for i := 0; i < b.threshold; i++ {
 		b.Record(false, now)
 	}
-	// 冷却走完 → 半开（failures = threshold-1 ✅✅）
+	// 冷却走完 → 半开（failures = threshold-1 ）
 	after := now.Add(2 * time.Minute)
 	if !b.Allow(after) {
 		t.Fatal("冷却过后应当放行试探")
 	}
-	// 试探成功 ⇒ 真恢复 ⇒ 退避重置 ✅✅
+	// 试探成功 ⇒ 真恢复 ⇒ 退避重置
 	b.Record(true, after)
 	if b.cooldown != channelBreakerCooldownBase {
 		t.Fatalf("恢复后冷却应重置为 %s，实际 %s", channelBreakerCooldownBase, b.cooldown)

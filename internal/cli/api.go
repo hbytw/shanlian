@@ -21,7 +21,7 @@ const (
 	apiReadTimeout = 5 * time.Second
 
 	// pprofDefaultAddr 性能剖析的监听地址。
-	// 只绑回环 —— 剖析端点能泄漏运行时信息，绝不能暴露到局域网 ✅✅
+	// 只绑回环 —— 剖析端点能泄漏运行时信息，绝不能暴露到局域网
 	pprofDefaultAddr = "127.0.0.1:6060"
 )
 
@@ -39,7 +39,7 @@ type apiServer struct {
 	probe  func(domain string) error
 	log    func(string, ...any)
 	// pprof 为 true 时在 API mux 上挂 /debug/pprof 端点。
-	// （独立监听端口由 startPprof 负责 ✅✅）
+	// （独立监听端口由 startPprof 负责 ）
 	pprof bool
 }
 
@@ -55,13 +55,13 @@ func startAPI(ctx context.Context, s *apiServer) (string, error) {
 
 	mux := http.NewServeMux()
 
-	// 性能剖析（pprof）—— 默认关闭 ✅
+	// 性能剖析（pprof）—— 默认关闭
 	//
-	// 为什么要有它 ✅✅：代理数据面的瓶颈在用户态协议栈（gvisor netstack ✅✅），
-	// 光看 CPU 占用和平均速率看不出热点在哪 ✅⚠️ —— 必须有 profile 才能对症下药 ✅✅
+	// 为什么要有它 ：代理数据面的瓶颈在用户态协议栈（gvisor netstack ），
+	// 光看 CPU 占用和平均速率看不出热点在哪  —— 必须有 profile 才能对症下药
 	//
-	// 安全 ✅✅：API 只监听 127.0.0.1 ✅✅（apiDefaultAddr ✅✅）⇒ 剖析端点不会暴露到局域网 ✅✅✅ ✅
-	// 开启方式：环境变量 SLX_PPROF=1 ✅✅（或 slx_pprof=1 ✅✅）
+	// 安全 ：API 只监听 127.0.0.1 （apiDefaultAddr ）⇒ 剖析端点不会暴露到局域网
+	// 开启方式：环境变量 SLX_PPROF=1 （或 slx_pprof=1 ）
 	if s.pprof {
 		mux.HandleFunc("/debug/pprof/", pprof.Index)
 		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -113,13 +113,13 @@ func startAPI(ctx context.Context, s *apiServer) (string, error) {
 
 // startPprof 启动独立的性能剖析 HTTP 服务。
 //
-// 为什么独立于 startAPI ✅✅：
-//   - startAPI 在「数据面启动成功」的分支里 ✅✅ —— 数据面降级时它就不在 ✅✅；
-//   - 优化数据面性能时，恰恰需要「数据面可能还没好也能剖析」✅✅ —— 否则无从下手 ✅✅；
-//   - 而且它必须与业务 API 解耦 ✅✅：剖析端点绝不能因为业务 API 的问题而不可用 ✅✅。
+// 为什么独立于 startAPI ：
+//   - startAPI 在「数据面启动成功」的分支里 —— 数据面降级时它就不在 ；
+//   - 优化数据面性能时，恰恰需要「数据面可能还没好也能剖析」—— 否则无从下手 ；
+//   - 而且它必须与业务 API 解耦 ：剖析端点绝不能因为业务 API 的问题而不可用 。
 //
-// 安全 ✅✅：只监听 127.0.0.1 ✅✅（默认 pprofAddr ✅✅）⇒ 不暴露到局域网 ✅✅✅ ✅
-// 开启方式：环境变量 SLX_PPROF=1 ✅✅
+// 安全 ：只监听 127.0.0.1 （默认 pprofAddr ）⇒ 不暴露到局域网
+// 开启方式：环境变量 SLX_PPROF=1
 func startPprof(ctx context.Context, enabled bool) (string, error) {
 	if !enabled {
 		return "", nil

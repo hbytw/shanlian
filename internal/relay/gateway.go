@@ -478,24 +478,24 @@ func (g *Gateway) HasAgent(nodeID string) bool {
 
 // HasUsableChannel 判断某 node_id 的 agent 当前是否**还有可用通道**。
 //
-// # 为什么需要它 ✅✅（2026-11-12 审计新增 ✅⚠️）
+// # 为什么需要它 （2026-11-12 审计新增 ）
 //
-// 「agent 在线」≠「agent 能用」✅✅
+// 「agent 在线」≠「agent 能用」
 //
-// 一台 agent 的所有通道都可能被熔断（通道级熔断，冷却 60 秒起 ✅✅）
-// 或正在重建（ZT 断线后要重新握手 ✅✅）。
+// 一台 agent 的所有通道都可能被熔断（通道级熔断，冷却 60 秒起 ）
+// 或正在重建（ZT 断线后要重新握手 ）。
 //
-// **这时候它仍在候选集里 ✅⚠️** ——
-//   - EgressCandidates 只按「有 egress 能力 + 状态 alive」过滤 ✅⚠️
-//   - L1 探测对「无可用通道」的 agent 整条跳过（不记丢包、不推进熔断）✅✅
-//   - ⇒ 它的丢包率永远不更新、评分永远保持高位 ✅⚠️
-//   - ⇒ 选路器会一直选中它 ⇒ 每次连接都失败 ✅⚠️
-//   - ⇒ 它就是个**黑洞代理** ✅⚠️
+// **这时候它仍在候选集里 ** ——
+//   - EgressCandidates 只按「有 egress 能力 + 状态 alive」过滤
+//   - L1 探测对「无可用通道」的 agent 整条跳过（不记丢包、不推进熔断）
+//   - ⇒ 它的丢包率永远不更新、评分永远保持高位
+//   - ⇒ 选路器会一直选中它 ⇒ 每次连接都失败
+//   - ⇒ 它就是个**黑洞代理**
 //
-// **.26 这台只有一条 ZeroTier 通道（没有直连）✅✅**
-// ⇒ ZT 一断它立刻变成黑洞代理 ✅⚠️
+// **.26 这台只有一条 ZeroTier 通道（没有直连）**
+// ⇒ ZT 一断它立刻变成黑洞代理
 //
-// ⇒ 所以候选集要**额外**按「有可用通道」过滤 ✅✅
+// ⇒ 所以候选集要**额外**按「有可用通道」过滤
 func (g *Gateway) HasUsableChannel(nodeID string) bool {
 	g.mu.RLock()
 	s, ok := g.agents[nodeID]
@@ -508,11 +508,11 @@ func (g *Gateway) HasUsableChannel(nodeID string) bool {
 
 // UsableAgentIDs 返回**有可用通道**的 agent node_id 列表。
 //
-// AgentIDs 的加强版：把「在线但一条通道都不剩」的 agent 排除掉 ✅✅
+// # AgentIDs 的加强版：把「在线但一条通道都不剩」的 agent 排除掉
 //
-// 为什么需要它：见 HasUsableChannel 的说明 ✅✅
+// 为什么需要它：见 HasUsableChannel 的说明
 //
-//	（黑洞代理的问题：它们在线、评分高、但每条连接都失败 ✅⚠️）
+//	（黑洞代理的问题：它们在线、评分高、但每条连接都失败 ）
 func (g *Gateway) UsableAgentIDs() []string {
 	ids := g.AgentIDs()
 	out := make([]string, 0, len(ids))
@@ -548,10 +548,10 @@ func (g *Gateway) Close() {
 //
 // 给测试与内部调用用：直接读 g.agents 会与写入产生数据竞争。
 //
-// ★ agent 不存在时返回 nil ✅✅ —— 调用方必须判空 ✅⚠️
+// ★ agent 不存在时返回 nil —— 调用方必须判空
 //
-//	（2026-11-11 CI 上真实崩过一次：测试里直接 .tlsChannels() ⇒ nil 解引用 ✅⚠️）
-//	想要"没有就当没有通道"的语义，请用测试辅助里的 agentSessionOf ✅✅。
+//	（2026-11-11 CI 上真实崩过一次：测试里直接 .tlsChannels() ⇒ nil 解引用 ）
+//	想要"没有就当没有通道"的语义，请用测试辅助里的 agentSessionOf 。
 func (g *Gateway) Session(nodeID string) *agentSession {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -674,20 +674,20 @@ func (g *Gateway) Ping(nodeID string, timeout time.Duration) (time.Duration, err
 		return 0, ErrNoAgent
 	}
 
-	// ★ 探测走**专用的探测通道**，不是业务主通道 ✅✅（审计「第 3 批 #14」）
+	// ★ 探测走**专用的探测通道**，不是业务主通道 （审计「第 3 批 #14」）
 	//
-	// 为什么可以这么做 ✅✅：
-	//   L1 指标要衡量的是「网关 ↔ 这个 agent」的链路质量 ✅✅
-	//   而同一个 agent 的多条 TLS 通道走的是**同一条物理路径** ✅✅
-	//   （只是不同的 TCP 连接）⇒ 换一条测出来的 RTT 基本一样 ✅✅
+	// 为什么可以这么做 ：
+	//   L1 指标要衡量的是「网关 ↔ 这个 agent」的链路质量
+	//   而同一个 agent 的多条 TLS 通道走的是**同一条物理路径**
+	//   （只是不同的 TCP 连接）⇒ 换一条测出来的 RTT 基本一样
 	//
-	// 换来的好处 ✅✅：
-	//   探测与业务**不再共享同一条 TCP 的拥塞窗口** ✅✅
-	//   ⇒ 一条几 MB 的业务传输不会把探测的小请求堵在后面 ✅✅
-	//   ⇒ 探测超时不再被误判成「出口链路失败」⇒ **不再误杀好出口** ✅✅
-	//   （那正是熔断级联的源头之一 ✅⚠️）
+	// 换来的好处 ：
+	//   探测与业务**不再共享同一条 TCP 的拥塞窗口**
+	//   ⇒ 一条几 MB 的业务传输不会把探测的小请求堵在后面
+	//   ⇒ 探测超时不再被误判成「出口链路失败」⇒ **不再误杀好出口**
+	//   （那正是熔断级联的源头之一 ）
 	//
-	// 只有一条通道时自动退化到它 ✅✅（见 pickProbeChannel ✅✅）
+	// 只有一条通道时自动退化到它 （见 pickProbeChannel ）
 	sel := s.pickProbeChannel(time.Now(), g.transportMode())
 	if sel == nil {
 		return 0, ErrNoUsableChannel
@@ -718,11 +718,11 @@ func (g *Gateway) PingHost(nodeID string, ip net.IP, timeout time.Duration) (boo
 	if len(cands) == 0 {
 		return false, ErrNoUsableChannel
 	}
-	// ★ 把探测专用通道排到最前面 ✅✅
+	// ★ 把探测专用通道排到最前面
 	//
-	// candidatesFor 是「业务主通道优先」✅⚠️ —— 对业务是对的 ✅✅
-	// 但对探测是错的 ✅⚠️：探测要和业务错开，才不会被业务流量饿死 ✅✅
-	// （审计「第 3 批 #14」✅✅）
+	// candidatesFor 是「业务主通道优先」 —— 对业务是对的
+	// 但对探测是错的 ：探测要和业务错开，才不会被业务流量饿死
+	// （审计「第 3 批 #14」）
 	if pc := s.pickProbeChannel(time.Now(), g.transportMode()); pc != nil {
 		reordered := make([]*channel, 0, len(cands))
 		reordered = append(reordered, pc)

@@ -68,7 +68,7 @@ func renderPeers(statePath string) int {
 	fmt.Println(strings.Repeat("=", 100))
 
 	if age > 15*time.Second {
-		fmt.Printf("⚠ 快照已 %s 未更新，守护进程可能已停止\n", humanAge(age))
+		fmt.Printf("快照已 %s 未更新，守护进程可能已停止\n", humanAge(age))
 	} else {
 		fmt.Printf("快照时间：%s 前\n", humanAge(age))
 	}

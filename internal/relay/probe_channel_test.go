@@ -5,20 +5,20 @@ import (
 	"time"
 )
 
-// newProbeTestSession 造一个带 n 条 TLS 通道的会话 ✅✅
+// newProbeTestSession 造一个带 n 条 TLS 通道的会话
 func newProbeTestSession(n int) *agentSession {
 	s := &agentSession{nodeID: "n-probe"}
 	for i := 0; i < n; i++ {
-		// 分数刻意不同 ⇒ 主通道确定 ✅✅
+		// 分数刻意不同 ⇒ 主通道确定
 		s.addChannel(fakeChannel(ChannelTLS, float64(50+i*10)))
 	}
 	return s
 }
 
-// TestPickProbeChannelPrefersNonPrimary 验证探测优先选**非业务主通道** ✅✅
+// TestPickProbeChannelPrefersNonPrimary 验证探测优先选**非业务主通道**
 //
-// 背景 ✅✅：探测与业务共享同一条 TCP 的拥塞窗口 ✅⚠️
-// ⇒ 业务大流量会把探测挤到后面 ⇒ 探测超时 ⇒ 误判「出口坏了」⇒ 熔断级联 ✅⚠️
+// 背景 ：探测与业务共享同一条 TCP 的拥塞窗口
+// ⇒ 业务大流量会把探测挤到后面 ⇒ 探测超时 ⇒ 误判「出口坏了」⇒ 熔断级联
 func TestPickProbeChannelPrefersNonPrimary(t *testing.T) {
 	s := newProbeTestSession(3)
 
@@ -37,7 +37,7 @@ func TestPickProbeChannelPrefersNonPrimary(t *testing.T) {
 	}
 }
 
-// TestPickProbeChannelPrefersLeastBusy 验证在多条备选里选在途流最少的 ✅✅
+// TestPickProbeChannelPrefersLeastBusy 验证在多条备选里选在途流最少的
 func TestPickProbeChannelPrefersLeastBusy(t *testing.T) {
 	s := newProbeTestSession(3)
 
@@ -54,7 +54,7 @@ func TestPickProbeChannelPrefersLeastBusy(t *testing.T) {
 		}
 	}
 	if len(others) < 2 {
-		t.Skipf("非主通道不足（%d），跳过 ✅✅", len(others))
+		t.Skipf("非主通道不足（%d），跳过 ", len(others))
 	}
 	others[0].inflight.Add(50)
 	others[1].inflight.Add(1)
@@ -68,9 +68,9 @@ func TestPickProbeChannelPrefersLeastBusy(t *testing.T) {
 	}
 }
 
-// TestPickProbeChannelFallsBackToPrimary 验证只有一条通道时退化到它 ✅✅
+// TestPickProbeChannelFallsBackToPrimary 验证只有一条通道时退化到它
 //
-// 退化是必须的 ✅✅：总不能让「没有别的通道」变成「不探测」——那更糟 ✅⚠️
+// 退化是必须的 ：总不能让「没有别的通道」变成「不探测」——那更糟
 func TestPickProbeChannelFallsBackToPrimary(t *testing.T) {
 	s := newProbeTestSession(1)
 
@@ -88,7 +88,7 @@ func TestPickProbeChannelFallsBackToPrimary(t *testing.T) {
 	}
 }
 
-// TestPickProbeChannelNoneWhenNoChannel 验证无可用通道时返回 nil ✅✅
+// TestPickProbeChannelNoneWhenNoChannel 验证无可用通道时返回 nil
 func TestPickProbeChannelNoneWhenNoChannel(t *testing.T) {
 	s := newProbeTestSession(2)
 	for _, c := range s.channels() {
@@ -99,7 +99,7 @@ func TestPickProbeChannelNoneWhenNoChannel(t *testing.T) {
 	}
 }
 
-// TestPickProbeChannelRespectsMode 验证 zt 模式下探测仍走 ZT 通道 ✅✅
+// TestPickProbeChannelRespectsMode 验证 zt 模式下探测仍走 ZT 通道
 func TestPickProbeChannelRespectsMode(t *testing.T) {
 	s := &agentSession{nodeID: "n-mode"}
 	s.addChannel(fakeChannel(ChannelZT, 200))

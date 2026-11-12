@@ -179,7 +179,7 @@ func (p *prober) onProbeResp(resp proto.ProbeResp, from *net.UDPAddr) {
 			rttMS = 0.1
 		}
 		p.pick.UpdateL1(nodeID, rttMS, 0, 0, now)
-		// ★ 链路信号 ⇒ 不推进熔断计数 ✅✅（见 picker.ReportLinkHealth ✅✅）
+		// ★ 链路信号 ⇒ 不推进熔断计数 （见 picker.ReportLinkHealth ）
 		p.pick.ReportLinkHealth(nodeID, true, "", now)
 		return
 	}

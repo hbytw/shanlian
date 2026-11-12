@@ -45,7 +45,7 @@ func TestSelector_EgressFailureTripsBreaker(t *testing.T) {
 	s := NewSelector(DefaultWeights())
 	now := time.Now()
 
-	// ★ 采样与判定分离 ⇒ 需要推进到判定 ✅✅
+	// ★ 采样与判定分离 ⇒ 需要推进到判定
 	tripBreakerWithReason(t, s, "egA", "出口链路失败：超时", now)
 	b := s.breakers["egA"]
 	if b == nil {

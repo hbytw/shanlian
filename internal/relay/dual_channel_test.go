@@ -403,11 +403,11 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) 
 
 // agentSessionOf 安全地取某个 agent 的会话。
 //
-// ★ agent 还没接入（或刚断开）时 map 里没有它 ⇒ Gateway.Session 返回 nil ✅✅
-// ⇒ **直接 .tlsChannels() 会 nil 解引用** ✅⚠️（2026-11-11 CI 上真实崩过 ✅⚠️）
-// ⇒ 这里统一返回**空会话**而不是 nil ✅✅ ⇒ 调用方拿到的是空通道列表 ✅✅
+// ★ agent 还没接入（或刚断开）时 map 里没有它 ⇒ Gateway.Session 返回 nil
+// ⇒ **直接 .tlsChannels() 会 nil 解引用** （2026-11-11 CI 上真实崩过 ）
+// ⇒ 这里统一返回**空会话**而不是 nil ⇒ 调用方拿到的是空通道列表
 //
-//	—— 对测试语义完全正确 ✅✅（还没接入 ⇒ 确实没有通道 ✅✅）✅ ✅
+//	—— 对测试语义完全正确 （还没接入 ⇒ 确实没有通道 ）
 func agentSessionOf(g *Gateway, nodeID string) *agentSession {
 	s := g.Session(nodeID)
 	if s == nil {

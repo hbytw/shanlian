@@ -230,18 +230,18 @@ func serve(ctx context.Context, log *slog.Logger, c *config.Config, env *envdete
 	// 「等了 20 秒才建 TUN」这种别扭的启动行为。
 	dp, planeErr := setupDataPlane(runCtx, log, c, env, nodeID, disc)
 
-	// 性能剖析：独立于数据面 ✅✅
+	// 性能剖析：独立于数据面
 	//
-	// 为什么放在这里 ✅✅：数据面是本项目的性能瓶颈 ✅⚠️（用户态协议栈 ✅✅），
-	// 优化它就必须能剖析「数据面跑起来之后」的状态 ✅✅ —— 但数据面启动本身
-	// 也可能失败/降级 ✅✅，那时恰恰最需要看剖析数据 ✅✅。
-	// 所以它既不能依赖 startAPI ✅✅（那个在 if dp != nil 里面 ✅✅），
-	// 也不能依赖数据面 ✅✅。
+	// 为什么放在这里 ：数据面是本项目的性能瓶颈 （用户态协议栈 ），
+	// 优化它就必须能剖析「数据面跑起来之后」的状态 —— 但数据面启动本身
+	// 也可能失败/降级 ，那时恰恰最需要看剖析数据 。
+	// 所以它既不能依赖 startAPI （那个在 if dp != nil 里面 ），
+	// 也不能依赖数据面 。
 	if paddr, perr := startPprof(runCtx, c.EffPprof()); perr == nil && paddr != "" {
 		log.Info("pprof 已启动", logx.Event("pprof.ready"),
 			"addr", paddr, logx.Hint("仅供本机使用，绑回环地址"))
 	} else if perr != nil {
-		// 用 Info 而不是 Debug：剖析是排障手段，失败时必须看得见 ✅⚠️
+		// 用 Info 而不是 Debug：剖析是排障手段，失败时必须看得见
 		log.Info("pprof 未启动", logx.Event("pprof.failed"), logx.FieldErr, perr.Error())
 	}
 	if planeErr != nil {

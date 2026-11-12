@@ -99,16 +99,16 @@ type AgentSummary struct {
 	TCPAccepted int64 `json:"tcp_accepted"`
 	TCPFailed   int64 `json:"tcp_failed"`
 	UDPAccepted int64 `json:"udp_accepted"`
-	// TCP 失败的分类归因：三者之和 = TCPFailed ✅✅
-	//   connect  ⇒ 出口连不上（查出口/选路 ✅✅）
-	//   endpoint ⇒ 协议栈端点建不起来（查协议栈 ✅✅）
-	//   limit    ⇒ 并发超限（查负载 ✅✅）
+	// TCP 失败的分类归因：三者之和 = TCPFailed
+	//   connect  ⇒ 出口连不上（查出口/选路 ）
+	//   endpoint ⇒ 协议栈端点建不起来（查协议栈 ）
+	//   limit    ⇒ 并发超限（查负载 ）
 	TCPFailConnect  int64 `json:"tcp_fail_connect"`
 	TCPFailEndpoint int64 `json:"tcp_fail_endpoint"`
 	TCPFailLimit    int64 `json:"tcp_fail_limit"`
 	// TCPActive 是当前在途的 TCP 中继连接数。
 	TCPActive int64 `json:"tcp_active"`
-	// TCPBytes/UDPBytes 是中继的字节数（双向合计）—— 判断「流量有没有真的走代理」最直接的证据 ✅✅
+	// TCPBytes/UDPBytes 是中继的字节数（双向合计）—— 判断「流量有没有真的走代理」最直接的证据
 	TCPBytes int64 `json:"tcp_bytes"`
 	UDPBytes int64 `json:"udp_bytes"`
 	// UDPFailed 是 UDP 建连失败次数。
@@ -159,10 +159,10 @@ type AgentDetail struct {
 	// 它**不代表出口坏了**，只说明有这么多用户请求的目标打不开
 	//（被墙 / 网站挂了）。这类失败不推进熔断计数。
 	TargetFailures int `json:"target_failures,omitempty"`
-	// LinkFailures 是累计的**链路层**失败次数（L1 探测失败 ✅✅）。
+	// LinkFailures 是累计的**链路层**失败次数（L1 探测失败 ）。
 	//
-	// ★ 链路失败**不推进熔断计数** ✅✅ —— 链路通 ≠ 出口可用 ✅✅
-	//   这里只是观测：链路抖得厉害时能一眼看到 ✅✅
+	// ★ 链路失败**不推进熔断计数** —— 链路通 ≠ 出口可用
+	//   这里只是观测：链路抖得厉害时能一眼看到
 	LinkFailures int    `json:"link_failures,omitempty"`
 	LinkReason   string `json:"link_reason,omitempty"`
 	Eligible     bool   `json:"eligible"` // 是否参与选路
@@ -741,12 +741,12 @@ func printProxyStatus(s *StatusSnapshot) {
 	fmt.Printf("  TUN 收 %d 包 / 发 %d 包\n", a.TunRead, a.TunWrite)
 	fmt.Printf("  TCP 接受 %d 条 / 失败 %d 条（在途 %d）    UDP 中继 %d 条 / 失败 %d 条\n",
 		a.TCPAccepted, a.TCPFailed, a.TCPActive, a.UDPAccepted, a.UDPFailed)
-	// ★ 失败要分类，不然看到一个总数根本不知道查哪 ✅✅
+	// ★ 失败要分类，不然看到一个总数根本不知道查哪
 	if a.TCPFailed > 0 {
 		fmt.Printf("  TCP 失败分类：出口连不上 %d / 端点建不起来 %d / 并发超限 %d\n",
 			a.TCPFailConnect, a.TCPFailEndpoint, a.TCPFailLimit)
 	}
-	// ★ 字节数是判断「流量到底有没有真的走代理」最直接的证据 ✅✅
+	// ★ 字节数是判断「流量到底有没有真的走代理」最直接的证据
 	if a.TCPBytes > 0 || a.UDPBytes > 0 {
 		fmt.Printf("  中继字节：TCP %s / UDP %s\n",
 			humanBytes(uint64(a.TCPBytes)), humanBytes(uint64(a.UDPBytes)))
