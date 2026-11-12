@@ -613,45 +613,71 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 	// 选通道：直连通道按 hash(dst)%N 打散，兜底通道单独承载。
 	// zt 模式下永远选中兜底通道（= 改造前的行为）。
 	dst := net.JoinHostPort(req.Addr, strconv.Itoa(int(req.Port)))
-	sel := s.pickChannel(dst, time.Now(), g.transportMode())
-	if sel == nil {
+	now := time.Now()
+
+	// ★ 拿**候选列表**而不是单条 ✅✅
+	//
+	// 2026-11-12 晚高峰修复：原来只 pick 一条，开流失败直接返回错误
+	// ⇒ 撞上「半死通道」（TCP 在、yamux 会话坏、探测还没发现）
+	//   每次建连都失败、且**不回退到其他通道** ⇒ 92% 建连失败率 ✅⚠️
+	// ⇒ 现在：逐条尝试，失败换下一条 ✅✅
+	cands := s.candidatesFor(dst, now, g.transportMode())
+	if len(cands) == 0 {
 		return nil, ErrNoUsableChannel
 	}
-	sel.inflight.Add(1)
-	defer sel.inflight.Add(-1)
 
-	// 开流要有超时：agent 失联但 yamux 还没发现时，OpenStream 会一直挂着，
-	// 网关侧就会有一个协程卡死在这里（表现为连接数只增不减）。
-	type openResult struct {
-		conn net.Conn
-		err  error
-	}
-	conn, err := openStreamWithTimeout(sel.sess, streamOpenTimeout)
-	if err != nil {
-		return nil, &ConnectError{Reset: true, Reason: "打开复用流失败: " + err.Error()}
+	var lastErr error
+	for i, sel := range cands {
+		sel.inflight.Add(1)
+		conn, err := openStreamWithTimeout(sel.sess, streamOpenTimeout)
+		sel.inflight.Add(-1)
+		if err != nil {
+			lastErr = err
+			// 开流失败 = 这条通道的 yamux 会话有问题
+			// ⇒ 记一次探测失败，让通道熔断器接手（连续几次后重建）✅✅
+			sel.recordProbe(false, 0, time.Now())
+			g.log.Debug("开流失败，换下一条通道",
+				logx.FieldEvent, "relay.open_retry",
+				logx.FieldNodeID, shortID(nodeID),
+				"channel", sel.Name(), "idx", i, "err", err.Error())
+			continue
+		}
+
+		// 写请求 + 读响应整体限时，避免 agent 卡住把网关协程占死。
+		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+
+		if err := stream.WriteConnectReq(conn, req); err != nil {
+			_ = conn.Close()
+			lastErr = err
+			sel.recordProbe(false, 0, time.Now())
+			continue
+		}
+		resp, err := stream.ReadConnectResp(conn)
+		if err != nil {
+			_ = conn.Close()
+			lastErr = err
+			sel.recordProbe(false, 0, time.Now())
+			continue
+		}
+		_ = conn.SetDeadline(time.Time{})
+
+		if !resp.Established {
+			_ = conn.Close()
+			// agent 明确回的是「我连不上这个目标」→ 出口本身没问题，
+			// 不能算作出口故障（否则用户访问几个打不开的站点就能把出口熔断掉）。
+			// ★ 注意：这条**不换通道重试** ✅✅ —— 换一条也是同一个 agent，结果一样
+			return nil, &ConnectError{Reset: resp.Reset, Reason: resp.Reason, TargetUnreachable: true}
+		}
+		// 成功：这条通道刚证明自己能用，记一次探测成功 ✅✅
+		sel.recordProbe(true, 0, time.Now())
+		return conn, nil
 	}
 
-	// 写请求 + 读响应整体限时，避免 agent 卡住把网关协程占死。
-	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
-
-	if err := stream.WriteConnectReq(conn, req); err != nil {
-		_ = conn.Close()
-		return nil, &ConnectError{Reset: true, Reason: "发送建连请求失败: " + err.Error()}
+	// 所有候选都失败
+	if lastErr == nil {
+		return nil, ErrNoUsableChannel
 	}
-	resp, err := stream.ReadConnectResp(conn)
-	if err != nil {
-		_ = conn.Close()
-		return nil, &ConnectError{Reset: true, Reason: "读取建连结果失败: " + err.Error()}
-	}
-	_ = conn.SetDeadline(time.Time{})
-
-	if !resp.Established {
-		_ = conn.Close()
-		// agent 明确回的是「我连不上这个目标」→ 出口本身没问题，
-		// 不能算作出口故障（否则用户访问几个打不开的站点就能把出口熔断掉）。
-		return nil, &ConnectError{Reset: resp.Reset, Reason: resp.Reason, TargetUnreachable: true}
-	}
-	return conn, nil
+	return nil, &ConnectError{Reset: true, Reason: "打开复用流失败: " + lastErr.Error()}
 }
 
 // shortID 截短 node_id 便于日志阅读。
