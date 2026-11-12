@@ -142,7 +142,7 @@ func (c *proxyConnector) connect(dst net.IP, port uint16, transport uint8) (net.
 	}
 	conn, err := c.gw.Open(nodeID, req)
 	if err != nil {
-		reportConnectFailure(c.picker, c.log, nodeID, err)
+		reportConnectFailure(c.picker, c.log, nodeID, err, time.Now())
 		var ce *relay.ConnectError
 		if errors.As(err, &ce) {
 			return nil, ce.Reset, err
@@ -168,7 +168,7 @@ func (c *proxyConnector) connect(dst net.IP, port uint16, transport uint8) (net.
 // 而且只要只剩一台出口，全家直接断网。
 //
 // 目标不可达只记一个计数（供状态页观察），**绝不推进熔断计数**。
-func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string, err error) {
+func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string, err error, now time.Time) {
 	if pick == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string
 		return
 	}
 	pick.ReportHealthWithReason(nodeID, false,
-		"出口链路失败："+probeErrPhrase(err), time.Now())
+		"出口链路失败："+probeErrPhrase(err), now)
 }
 
 func (c *proxyConnector) ConnectTCP(dst net.IP, port uint16) (net.Conn, bool, error) {

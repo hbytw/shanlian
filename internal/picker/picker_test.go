@@ -351,9 +351,8 @@ func TestSelector_BreakerExcludesEgress(t *testing.T) {
 	s.UpdateL1("egB", 200, 0.2, 5, now)
 
 	// 把 egA 熔断
-	for i := 0; i < breakerThreshold; i++ {
-		s.ReportHealth("egA", false, now)
-	}
+	// ★ 采样与判定分离 ⇒ 需要推进到判定 ✅✅
+	tripBreaker(t, s, "egA", now)
 
 	d := s.Pick(net.ParseIP("1.2.3.4"), "", []string{"egA", "egB"}, now)
 	if d.Egress != "egB" {
@@ -372,9 +371,7 @@ func TestSelector_AllBrokenFallsBack(t *testing.T) {
 	s.UpdateL1("egA", 10, 0, 100, now)
 	s.UpdateL1("egB", 20, 0, 50, now)
 	for _, id := range []string{"egA", "egB"} {
-		for i := 0; i < breakerThreshold; i++ {
-			s.ReportHealth(id, false, now)
-		}
+		tripBreaker(t, s, id, now)
 	}
 	d := s.Pick(net.ParseIP("1.2.3.4"), "", []string{"egA", "egB"}, now)
 	if d.Egress == "" {

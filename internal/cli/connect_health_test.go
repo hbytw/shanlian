@@ -9,17 +9,27 @@ import (
 	"slx/internal/relay"
 )
 
+// —— 建连失败与熔断 ——
+//
+// ★ 现在熔断的判定是「采样与判定分离」✅✅：
+//   高频的失败采样不直接熔断 ✅✅
+//   ⇒ 每 30 秒判定一次，连续 3 次判定不健康才熔断 ✅✅
+//   ⇒ 实际熔断耗时 90 秒 ✅✅（改动前只要 10 秒 ✅⚠️）
+//
+// ⇒ 所以这些测试要**推进模拟时间**才能跨过判定点 ✅✅
+
 // TestReportConnectFailure_TargetUnreachableDoesNotTrip 覆盖验收项 a：
 // 「用户目标不可达」不推进熔断计数（连失败 10 次也不熔断）。
 func TestReportConnectFailure_TargetUnreachableDoesNotTrip(t *testing.T) {
 	pick := picker.NewSelector(picker.DefaultWeights())
+	now := time.Now()
 
 	for i := 0; i < 10; i++ {
 		reportConnectFailure(pick, nil, "egA", &relay.ConnectError{
 			Reset:             true,
 			Reason:            "dial tcp 1.2.3.4:443: connect: connection refused",
 			TargetUnreachable: true,
-		})
+		}, now)
 	}
 
 	if b := pick.BreakerOf("egA"); b != nil {
@@ -31,21 +41,24 @@ func TestReportConnectFailure_TargetUnreachableDoesNotTrip(t *testing.T) {
 }
 
 // TestReportConnectFailure_EgressFaultTrips 覆盖验收项 b：
-// 「连 agent 本身失败」推进熔断计数，连续失败会熔断。
+// 「连 agent 本身失败」推进熔断计数，连续判定失败会熔断。
 func TestReportConnectFailure_EgressFaultTrips(t *testing.T) {
 	pick := picker.NewSelector(picker.DefaultWeights())
 	now := time.Now()
 
 	// relay 层失败（agent 会话断 / 开不了流）—— 不是 ConnectError。
-	for i := 0; i < 10; i++ {
-		reportConnectFailure(pick, nil, "egA", errors.New("打开复用流失败: EOF"))
+	// ★ 推进模拟时间，跨过每个判定点 ✅✅
+	step := 15 * time.Second
+	for i := 0; i < 8; i++ {
+		reportConnectFailure(pick, nil, "egA",
+			errors.New("打开复用流失败: EOF"), now.Add(time.Duration(i)*step))
 	}
 
 	b := pick.BreakerOf("egA")
 	if b == nil {
 		t.Fatal("出口链路失败应创建熔断器")
 	}
-	if st, _ := b.State(now); st != "熔断" {
+	if st, _ := b.State(now.Add(2 * time.Minute)); st != "熔断" {
 		t.Fatalf("出口链路连续失败应熔断，实际 %q", st)
 	}
 }
@@ -60,7 +73,7 @@ func TestReportConnectFailure_TargetUnreachableStillCountsAsHealthy(t *testing.T
 	reportConnectFailure(pick, nil, "egA", &relay.ConnectError{
 		Reason:            "network is unreachable",
 		TargetUnreachable: true,
-	})
+	}, now)
 
 	d := pick.Pick(nil, "", []string{"egA"}, now)
 	if d.Egress != "egA" {

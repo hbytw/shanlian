@@ -10,7 +10,7 @@ import (
 
 // 熔断参数。
 const (
-	// breakerThreshold 是连续失败多少次后熔断（L1：网关 ↔ 出口链路）。
+	// breakerThreshold 保留给直接使用 Breaker 的场景。
 	breakerThreshold = 5
 	// l2BreakerThreshold 是 L2（出口 ↔ 公网）连续失败多少次后熔断。
 	//

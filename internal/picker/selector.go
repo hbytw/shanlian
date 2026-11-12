@@ -96,6 +96,13 @@ type Selector struct {
 
 	// breakers 是每个出口的 L1 熔断器（网关 ↔ 出口链路）。
 	breakers map[string]*Breaker
+	// gates 是每个出口的健康判定门 ✅✅
+	//
+	// 作用：把高频采样翻译成低频抗抖的判定 ✅✅
+	// ⇒ 熔断不再由「连续 5 次采样失败（10 秒）」触发 ✅✅
+	// ⇒ 而是由「连续 3 次判定失败（90 秒）」触发 ✅✅
+	// 详见 healthgate.go ✅✅
+	gates map[string]*HealthGate
 	// l2Breakers 是每个出口的 L2 熔断器（出口 ↔ 公网）。
 	//
 	// 与 L1 **完全独立**：L1 成功不清 L2 的失败计数，反之亦然。
@@ -129,6 +136,7 @@ func NewSelector(weights Weights) *Selector {
 		l1:             make(map[string]*Quality, 8),
 		l2:             make(map[string]map[string]*Quality, 32),
 		breakers:       make(map[string]*Breaker, 8),
+		gates:          make(map[string]*HealthGate, 8),
 		l2Breakers:     make(map[string]*Breaker, 8),
 		targetFailures: make(map[string]int, 8),
 		table:          NewRouteTable(),
@@ -205,6 +213,18 @@ func (s *Selector) ReportHealth(egressID string, ok bool, now time.Time) {
 
 // ReportHealthWithReason 喂一次健康检查结果，并记录失败原因（用于状态展示）。
 //
+// # ★ 抗抖：采样与判定是两层 ✅✅
+//
+// 高频的探测采样（每 2 秒一次）与低频的熔断判定（每 30 秒一次）是分开的 ✅✅
+//
+//   - 每次调用先记一次采样 ✅✅
+//   - **只有到了判定时点**才把结果报给熔断器 ✅✅
+//   - 判定成功 ⇒ 报一次成功（清零失败计数 ✅✅）
+//   - 连续 3 次判定失败 ⇒ 报一次失败 ⇒ 熔断 ✅✅
+//
+// ⇒ 判定耗时 90 秒，而不是「连续 5 次采样失败」的 10 秒 ✅✅
+// ⇒ 单次抖动不再能熔断出口 ✅✅（这正是频繁切换的根源 ✅⚠️）
+//
 // # 最小存活时长保护
 //
 // 上线不足 MinEgressUptime 的出口，失败**不计入**熔断计数。
@@ -221,12 +241,16 @@ func (s *Selector) ReportHealth(egressID string, ok bool, now time.Time) {
 // reason 只是一句展示用的短语（例："L2 连不上 1.1.1.1（超时）"），
 // 判定逻辑只看连续失败次数。
 func (s *Selector) ReportHealthWithReason(egressID string, ok bool, reason string, now time.Time) {
+	if egressID == "" {
+		return
+	}
 	s.mu.Lock()
 	if !ok && s.inGraceLocked(egressID, now) {
 		// 还在最小存活时长内：这次失败不计入熔断计数。
 		s.mu.Unlock()
 		return
 	}
+	gate := s.gateLocked(egressID)
 	b := s.breakerLocked(egressID)
 	wasBroken := false
 	if st, _ := b.State(now); st == "熔断" {
@@ -234,12 +258,36 @@ func (s *Selector) ReportHealthWithReason(egressID string, ok bool, reason strin
 	}
 	s.mu.Unlock()
 
-	b.RecordWithReason(ok, reason, now)
-
-	if !ok && wasBroken {
-		// 出口刚进入熔断：让它的路由表条目立即失效
-		s.table.Invalidate(egressID)
+	// ★ 采样先记进门 ✅✅
+	judged, healthy, tripped, _ := gate.Record(ok, now)
+	if !judged {
+		// 还没到判定时点 ⇒ 只记采样，**不推进**熔断计数 ✅✅
+		return
 	}
+
+	// ★ 到判定点了 ⇒ 把**判定结果**报给熔断器 ✅✅
+	//
+	// ★ 注意区分两个概念 ✅✅：
+	//   healthy=false（这次判定认为出口不健康）✅✅
+	//   tripped（连续判定失败够次数了，该熔断了）✅✅
+	//
+	// ★ 曾经的错误 ✅⚠️：把 tripped 当成判定结果报上去 ✅⚠️
+	//   ⇒ 第一次判定失败时 tripped=false ⇒ 报的是「成功」✅⚠️
+	//   ⇒ 失败原因永远记不上、失败计数永远清零 ✅⚠️
+	//   ⇒ 熔断器形同虚设 ✅⚠️
+	//
+	if !healthy {
+		// 判定不健康 ⇒ 报一次失败 ✅✅
+		// （熔断器自己的阈值是 1 ⇒ 一次失败就熔断 ✅✅）
+		b.RecordWithReason(false, reason, now)
+		if tripped && !wasBroken {
+			// 出口刚进入熔断：让它的路由表条目立即失效
+			s.table.Invalidate(egressID)
+		}
+		return
+	}
+	// 判定健康 ⇒ 报一次成功，清零失败计数 ✅✅
+	b.RecordWithReason(true, "", now)
 }
 
 // ReportTargetFailure 记录一次「用户目标不可达」。
@@ -384,6 +432,11 @@ func (s *Selector) ResetEgress(egressID string) {
 	// 熔断器整个删掉：下次用到时新建，状态回到 closed。
 	delete(s.breakers, egressID)
 	delete(s.l2Breakers, egressID)
+	// ★ 判定门也要清 ✅✅
+	// ⇒ 否则它带着「连续判定失败 2 次」的状态回来 ✅⚠️
+	// ⇒ 一次采样就凑够 3 次 ⇒ 刚上线就熔断 ✅⚠️
+	// ⇒ 这正是「刚回来又熔断」的形态 ✅⚠️
+	delete(s.gates, egressID)
 	delete(s.targetFailures, egressID)
 	delete(s.l1, egressID)
 	for dest, m := range s.l2 {
@@ -631,10 +684,30 @@ func (s *Selector) l2Locked(destKey, egressID string) *Quality {
 func (s *Selector) breakerLocked(egressID string) *Breaker {
 	b := s.breakers[egressID]
 	if b == nil {
-		b = NewBreaker()
+		// ★ 阈值是 1 ✅✅
+		//
+		// 因为抗抖已经交给 HealthGate 做了 ✅✅
+		// ⇒ 熔断器收到一次「判定失败」就该立刻熔断 ✅✅
+		// ⇒ 再让它自己累计 5 次，等于把判定时间又拉长 5 倍 ✅⚠️
+		//
+		// ⇒ 实际熔断耗时 = HealthGate 的判定间隔 × 判定次数
+		//   = 30 秒 × 3 = 90 秒 ✅✅
+		b = NewBreakerWithThreshold(l1BreakerThreshold)
 		s.breakers[egressID] = b
 	}
 	return b
+}
+
+// gateLocked 返回该出口的健康判定门 ✅✅
+//
+// 必须是调用方持锁 ✅✅
+func (s *Selector) gateLocked(egressID string) *HealthGate {
+	g := s.gates[egressID]
+	if g == nil {
+		g = NewHealthGate()
+		s.gates[egressID] = g
+	}
+	return g
 }
 
 func (s *Selector) l2BreakerLocked(egressID string) *Breaker {

@@ -45,9 +45,8 @@ func TestSelector_EgressFailureTripsBreaker(t *testing.T) {
 	s := NewSelector(DefaultWeights())
 	now := time.Now()
 
-	for i := 0; i < breakerThreshold; i++ {
-		s.ReportHealthWithReason("egA", false, "出口链路失败：超时", now)
-	}
+	// ★ 采样与判定分离 ⇒ 需要推进到判定 ✅✅
+	tripBreakerWithReason(t, s, "egA", "出口链路失败：超时", now)
 	b := s.breakers["egA"]
 	if b == nil {
 		t.Fatal("应已创建熔断器")
