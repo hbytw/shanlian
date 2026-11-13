@@ -435,18 +435,24 @@ return m
 write("/usr/lib/lua/luci/view/slx/status.htm", r"""<%+header%>
 
 <style>
-.slx-card { background:#fff; border-radius:6px; padding:16px; margin-bottom:16px;
-            box-shadow:0 1px 3px rgba(0,0,0,.08); }
-.slx-card h3 { margin:0 0 12px; font-size:15px; color:#333;
-               border-left:3px solid #2196f3; padding-left:8px; }
-.slx-kv { display:flex; flex-wrap:wrap; gap:8px 24px; }
-.slx-kv div { min-width:150px; }
-.slx-kv .k { color:#888; font-size:12px; }
-.slx-kv .v { font-size:16px; font-weight:600; color:#222; }
-.slx-ok { color:#4caf50; } .slx-bad { color:#f44336; } .slx-warn { color:#ff9800; }
-.slx-agent { display:inline-block; background:#e3f2fd; color:#1565c0;
-             border-radius:4px; padding:2px 8px; margin:2px; font-size:12px; }
-.slx-msg { color:#999; font-size:13px; }
+.slx-card{background:#fff;border-radius:6px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.slx-card h3{margin:0 0 12px;font-size:15px;color:#333;border-left:3px solid #2196f3;padding-left:8px}
+.slx-kv{display:flex;flex-wrap:wrap;gap:8px 24px}
+.slx-kv>div{min-width:140px}
+.slx-kv .k{color:#888;font-size:12px}
+.slx-kv .v{font-size:16px;font-weight:600;color:#222}
+.slx-ok{color:#4caf50}.slx-bad{color:#f44336}.slx-warn{color:#ff9800}
+.slx-agent{display:inline-block;background:#e3f2fd;color:#1565c0;border-radius:4px;padding:2px 8px;margin:2px;font-size:12px}
+.slx-msg{color:#999;font-size:13px}
+.slx-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.slx-tbl th{text-align:left;padding:6px 8px;color:#888;font-weight:600;border-bottom:2px solid #eee;font-size:12px}
+.slx-tbl td{padding:6px 8px;border-bottom:1px solid #f5f5f5}
+.slx-tbl tr:last-child td{border-bottom:0}
+.slx-mono{font-family:monospace;color:#555}
+.slx-best{background:#f1f8e9}
+.slx-tag{display:inline-block;background:#4caf50;color:#fff;border-radius:3px;padding:1px 5px;font-size:10px;margin-left:4px;vertical-align:middle}
+.slx-sub{font-size:11px;color:#999;margin-top:2px;line-height:1.4}
+.slx-mini{display:inline-block;background:#f5f5f5;color:#666;border-radius:3px;padding:0 5px;font-size:10px;margin:2px 4px 0 0}
 </style>
 
 <div class="cbi-map">
@@ -454,136 +460,210 @@ write("/usr/lib/lua/luci/view/slx/status.htm", r"""<%+header%>
 
 <div class="slx-card">
 	<h3>服务</h3>
-	<div class="slx-kv" id="slx-basic">
-		<div><div class="k">状态</div><div class="v" id="slx-run">读取中…</div></div>
-		<div><div class="k">模式</div><div class="v" id="slx-mode">—</div></div>
-		<div><div class="k">运行时长</div><div class="v" id="slx-uptime">—</div></div>
+	<div class="slx-kv">
+		<div><div class="k">状态</div><div class="v" id="s-run">读取中…</div></div>
+		<div><div class="k">模式</div><div class="v" id="s-mode">—</div></div>
+		<div><div class="k">运行时长</div><div class="v" id="s-up">—</div></div>
+		<div><div class="k">版本</div><div class="v" id="s-ver">—</div></div>
+		<div><div class="k">数据更新</div><div class="v" id="s-fresh">—</div></div>
+		<div><div class="k">节点 ID</div><div class="v" id="s-node">—</div></div>
 	</div>
 </div>
 
-<div class="slx-card">
-	<h3>出口</h3>
-	<div id="slx-agents" class="slx-msg">读取中…</div>
-</div>
+<div class="slx-card"><h3>出口</h3><div id="s-agents" class="slx-msg">读取中…</div></div>
 
-<div class="slx-card">
-	<h3>分流</h3>
-	<div id="slx-split" class="slx-msg">读取中…</div>
-</div>
+<div class="slx-card"><h3>通道（直连 / 兜底）</h3><div id="s-channels" class="slx-msg">读取中…</div></div>
+
+<div class="slx-card"><h3>分流</h3><div id="s-split" class="slx-msg">读取中…</div></div>
+
+<div class="slx-card"><h3>DNS 转发</h3><div id="s-dns" class="slx-msg">读取中…</div></div>
 
 <div class="slx-card">
 	<h3>数据面</h3>
-	<div class="slx-kv" id="slx-plane">
-		<div><div class="k">TUN 收 / 发</div><div class="v" id="slx-tun">—</div></div>
-		<div><div class="k">TCP 中继</div><div class="v" id="slx-tcp">—</div></div>
-		<div><div class="k">UDP 中继</div><div class="v" id="slx-udp">—</div></div>
-		<div><div class="k">ICMP 回复</div><div class="v" id="slx-icmp">—</div></div>
+	<div class="slx-kv">
+		<div><div class="k">TUN 收 / 发</div><div class="v" id="s-tun">—</div></div>
+		<div><div class="k">TCP 成功 / 失败</div><div class="v" id="s-tcp">—</div></div>
+		<div><div class="k">失败细分（连不上/栈/超限）</div><div class="v" id="s-tcpfail">—</div></div>
+		<div><div class="k">在途 TCP 连接</div><div class="v" id="s-tcpactive">—</div></div>
+		<div><div class="k">TCP / UDP 中继流量</div><div class="v" id="s-bytes">—</div></div>
+		<div><div class="k">UDP 成功 / 失败</div><div class="v" id="s-udp">—</div></div>
+		<div><div class="k">ICMP 回复 / 丢弃</div><div class="v" id="s-icmp">—</div></div>
 	</div>
 </div>
 
-<div class="slx-card">
-	<h3>结论</h3>
-	<div id="slx-findings" class="slx-msg">读取中…</div>
-</div>
+<div class="slx-card"><h3>结论</h3><div id="s-find" class="slx-msg">读取中…</div></div>
 </div>
 
 <script type="text/javascript">
 //<![CDATA[
-function slxAge(sec) {
-	if (!sec || sec < 0) return '—';
-	var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600),
-	    m = Math.floor(sec % 3600 / 60);
-	if (d > 0) return d + ' 天 ' + h + ' 小时';
-	if (h > 0) return h + ' 小时 ' + m + ' 分';
-	return m + ' 分钟';
+function slxAge(sec){
+	if(!sec||sec<0)return '—';
+	var d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60);
+	if(d>0)return d+' 天 '+h+' 小时';
+	if(h>0)return h+' 小时 '+m+' 分';
+	return m+' 分钟';
 }
-function slxSet(id, txt, cls) {
-	var el = document.getElementById(id);
-	if (!el) return;
-	el.textContent = txt;
-	el.className = 'v' + (cls ? ' ' + cls : '');
+function slxSet(id,txt,cls){
+	var el=document.getElementById(id); if(!el)return;
+	el.textContent=txt; el.className='v'+(cls?' '+cls:'');
 }
-function slxRender(d) {
-	var running = d.running !== false && d.node_id;
-	slxSet('slx-run', running ? '运行中' : '未运行',
-		running ? 'slx-ok' : 'slx-bad');
-	slxSet('slx-mode', d.mode || '—');
-	slxSet('slx-uptime', running && d.started_at
-		? slxAge((Date.now() - new Date(d.started_at).getTime()) / 1000) : '—');
+function slxRender(d){
+	var run = d.running!==false && d.node_id;
+	slxSet('s-run', run?'运行中':'未运行', run?'slx-ok':'slx-bad');
+	slxSet('s-mode', d.mode||'—');
+	slxSet('s-up', (run&&d.started_at)?slxAge((Date.now()-new Date(d.started_at).getTime())/1000):'—');
+	slxSet('s-ver', d.version||'—');
+	slxSet('s-node', d.node_id?d.node_id.substring(0,12):'—');
+	// 数据新鲜度：快照每 5 秒写一次，超过 30 秒没更新说明守护进程卡了
+	if(d.updated_at){
+		var age=Math.round((Date.now()-new Date(d.updated_at).getTime())/1000);
+		var cls = age<30?'slx-ok':(age<120?'slx-warn':'slx-bad');
+		slxSet('s-fresh', age<60?(age+' 秒前'):(Math.round(age/60)+' 分钟前'), cls);
+	}else{ slxSet('s-fresh','—'); }
 
-	// 出口
-	var a = d.agents || {};
-	var ag = document.getElementById('slx-agents');
-	if (!running) {
-		ag.innerHTML = '<span class="slx-msg">服务未运行</span>';
-	} else if (!a.count) {
-		ag.innerHTML = '<span class="slx-bad">已接入 0 个</span>' +
-			'<div class="slx-msg" style="margin-top:6px">出口节点执行：' +
-			'<code>slx agent --gateway &lt;本机IP:' +
-			(a.listen ? (a.listen.split(':').pop() || '11601') : '11601') + '&gt;</code></div>';
-	} else {
-		var html = '<span class="slx-ok">已接入 ' + a.count + ' 个</span>' +
-			'<span class="slx-msg">　监听 ' + (a.listen || '—') + '</span><div style="margin-top:6px">';
-		(a.ids || []).forEach(function(id) {
-			html += '<span class="slx-agent">' + id + '</span>';
+	var a=d.agents||{}, ag=document.getElementById('s-agents');
+	if(!run){ ag.innerHTML='<span class="slx-msg">服务未运行</span>'; }
+	else if(!a.count){
+		ag.innerHTML='<span class="slx-bad">已接入 0 个</span>'+
+			'<div class="slx-msg" style="margin-top:6px">在出口节点执行：'+
+			'<code>slx agent --gateway &lt;本机IP:11601&gt;</code></div>';
+	}else if(a.details && a.details.length){
+		var h='<div style="margin-bottom:8px"><span class="slx-ok">已接入 '+a.count+' 个</span>'+
+			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span>'+
+			'<span class="slx-msg">　按评分排序，第一行是当前最优</span></div>'+
+			'<table class="slx-tbl"><thead><tr>'+
+			'<th>位置</th><th>节点</th><th>评分</th><th>延迟</th><th>带宽</th><th>丢包</th><th>状态</th>'+
+			'</tr></thead><tbody>';
+		a.details.forEach(function(x, idx){
+			var state='正常', cls='slx-ok';
+			if(x.breaker === '熔断'){ state='熔断'; cls='slx-bad'; }
+			else if(x.breaker === '试探'){ state='试探'; cls='slx-warn'; }
+			else if(x.eligible === false){ state='不参与'; cls='slx-msg'; }
+			else if(x.note){ state=x.note; cls='slx-msg'; }
+			var rtt = x.rtt_ms > 0 ? Math.round(x.rtt_ms)+' ms' : '—';
+			var bw  = x.bw_mbps > 0 ? x.bw_mbps.toFixed(1)+' M' : '—';
+			var loss= (x.loss > 0) ? (x.loss*100).toFixed(1)+'%' : '0%';
+			var loc = x.label || x.remote || '—';
+			// 状态的第二行：失败归因（熔断/失败原因 + 计数）
+			var sub='';
+			if(x.breaker_reason) sub+='<div class="slx-sub slx-warn">'+x.breaker_reason+'</div>';
+			var tags='';
+			if(x.target_failures>0) tags+='<span class="slx-mini">目标打不开 '+x.target_failures+'</span>';
+			if(x.link_failures>0) tags+='<span class="slx-mini">链路失败 '+x.link_failures+'</span>';
+			if(x.link_reason && x.link_failures>0) sub+='<div class="slx-sub slx-msg">'+x.link_reason+'</div>';
+			var stateCell='<td class="'+cls+'">'+state+(tags?'<div>'+tags+'</div>':'')+sub+'</td>';
+			var rowCls = (idx === 0) ? ' class="slx-best"' : '';
+			h += '<tr'+rowCls+'><td>'+loc+(idx===0?' <span class="slx-tag">当前</span>':'')+'</td>'+
+			     '<td class="slx-mono">'+x.id+'</td>'+
+			     '<td><strong>'+x.score.toFixed(1)+'</strong></td>'+
+			     '<td>'+rtt+'</td><td>'+bw+'</td><td>'+loss+'</td>'+
+			     stateCell+'</tr>';
 		});
-		ag.innerHTML = html + '</div>';
+		ag.innerHTML = h + '</tbody></table>'+
+			'<div class="slx-msg" style="margin-top:8px">评分越高越优先；延迟/带宽/丢包为实时实测值。</div>';
+	}else{
+		var h='<span class="slx-ok">已接入 '+a.count+' 个</span>'+
+			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span><div style="margin-top:6px">';
+		(a.ids||[]).forEach(function(id){ h+='<span class="slx-agent">'+id+'</span> '; });
+		ag.innerHTML=h+'<div class="slx-msg" style="margin-top:6px">测量数据生成中…</div></div>';
 	}
 
-	// 分流
-	var sp = d.split || {};
-	var el = document.getElementById('slx-split');
-	if (sp.enabled) {
-		el.innerHTML = '<span class="slx-ok">已启用</span>' +
-			'<span class="slx-msg">　接口 ' + (sp.ifaces || []).join(',') +
-			'　国内网段 ' + (sp.cn_entries || 0) + ' 条</span>';
-	} else {
-		el.innerHTML = '<span class="slx-warn">未启用</span>' +
-			'<span class="slx-msg">　境外流量走直连</span>';
+	var sp=d.split||{}, el=document.getElementById('s-split');
+	if(sp.enabled){
+		el.innerHTML='<span class="slx-ok">已启用</span><span class="slx-msg">　接口 '+
+			(sp.ifaces||[]).join(',')+'　国内网段 '+(sp.cn_entries||0)+' 条</span>';
+	}else{
+		el.innerHTML='<span class="slx-warn">未启用</span><span class="slx-msg">　境外流量走直连</span>';
 	}
 
-	// 数据面
-	slxSet('slx-tun', (a.tun_read || 0) + ' / ' + (a.tun_write || 0));
-	slxSet('slx-tcp', (a.tcp_accepted || 0) + ' 条');
-	slxSet('slx-udp', (a.udp_accepted || 0) + ' 条');
-	slxSet('slx-icmp', (a.icmp_replied || 0) + ' 次');
+	slxSet('s-tun',(a.tun_read||0)+' / '+(a.tun_write||0));
+	slxSet('s-tcp',(a.tcp_accepted||0)+' / '+(a.tcp_failed||0));
+	slxSet('s-tcpfail',(a.tcp_fail_connect||0)+' / '+(a.tcp_fail_endpoint||0)+' / '+(a.tcp_fail_limit||0));
+	slxSet('s-tcpactive',String(a.tcp_active||0));
+	function slxFmtBytes(n){
+		if(!n||n<=0) return '0';
+		if(n>=1073741824) return (n/1073741824).toFixed(1)+' GB';
+		if(n>=1048576) return (n/1048576).toFixed(1)+' MB';
+		if(n>=1024) return (n/1024).toFixed(0)+' KB';
+		return n+' B';
+	}
+	slxSet('s-bytes', slxFmtBytes(a.tcp_bytes)+' / '+slxFmtBytes(a.udp_bytes));
+	slxSet('s-udp',(a.udp_accepted||0)+' / '+(a.udp_failed||0));
+	slxSet('s-icmp',(a.icmp_replied||0)+' / '+(a.icmp_dropped||0));
 
-	// 结论
-	var f = d.findings || [];
-	var fe = document.getElementById('slx-findings');
-	if (!running) {
-		fe.innerHTML = '<span class="slx-msg">服务未运行，请在「设置」中启用。</span>';
-	} else if (!f.length) {
-		fe.innerHTML = '<span class="slx-ok">一切正常</span>';
-	} else {
-		var h = '';
-		f.forEach(function(x) {
-			var cls = (x.severity === '致命') ? 'slx-bad'
-				: (x.severity === '降级' ? 'slx-warn' : 'slx-msg');
-			h += '<div style="margin-bottom:8px"><span class="' + cls + '">[' +
-				(x.severity || '') + '] ' + (x.title || '') + '</span>';
-			if (x.detail) h += '<div class="slx-msg">现象：' + x.detail + '</div>';
-			if (x.action) h += '<div class="slx-msg">处理：' + x.action + '</div>';
-			h += '</div>';
+	// —— 通道卡 ——
+	var chs=d.channels||[], cel=document.getElementById('s-channels');
+	if(!run){ cel.innerHTML='<span class="slx-msg">服务未运行</span>'; }
+	else if(!chs.length){ cel.innerHTML='<span class="slx-msg">暂无通道数据（服务刚启动，等下一轮刷新）</span>'; }
+	else{
+		// 节点 ID → 位置标签 的映射（通道里是完整 node_id，详情里是截短的）
+		var lbl={};
+		(a.details||[]).forEach(function(x){ if(x.label) lbl[x.id]=x.label; });
+		var h='<table class="slx-tbl"><thead><tr>'+
+			'<th>位置</th><th>出口</th><th>类型</th><th>对端</th><th>评分</th>'+
+			'<th>角色</th><th>状态</th><th>流数</th><th>在线</th>'+
+			'</tr></thead><tbody>';
+		chs.forEach(function(c){
+			var nid=c.node_id||'';
+			var short=nid.substring(0,12);
+			var loc=lbl[short]||lbl[nid]||short;
+			var kind = c.kind==='tls'?'<span class="slx-ok">直连</span>':'<span class="slx-msg">兜底</span>';
+			var role = c.primary?'<span class="slx-tag">主</span>':'备';
+			var st = c.open?'<span class="slx-bad">熔断</span>':'<span class="slx-ok">正常</span>';
+			var streams = (c.streams>50)?'<span class="slx-warn">'+c.streams+'</span>':(c.streams||0);
+			h+='<tr><td>'+loc+'</td><td class="slx-mono">'+short+'</td><td>'+kind+'</td>'+
+			   '<td class="slx-mono">'+(c.remote||'—')+'</td>'+
+			   '<td><strong>'+Number(c.score||0).toFixed(1)+'</strong></td>'+
+			   '<td>'+role+'</td><td>'+st+'</td><td>'+streams+'</td>'+
+			   '<td>'+(c.since?slxAge((Date.now()-new Date(c.since).getTime())/1000):'—')+'</td></tr>';
 		});
-		fe.innerHTML = h;
+		cel.innerHTML=h+'</tbody></table>'+
+			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。流数持续偏高说明有开流卡住。</div>';
+	}
+
+	// —— DNS 卡 ——
+	var dn=d.dns||{}, del=document.getElementById('s-dns');
+	if(!dn.enabled){
+		del.innerHTML='<span class="slx-warn">未启用</span><span class="slx-msg">　境外域名不解析</span>';
+	}else{
+		var failCls = dn.failures>0 && dn.queries>0 && (dn.failures/dn.queries>0.3)?'slx-warn':'slx-msg';
+		del.innerHTML='<div class="slx-kv">'+
+			'<div><div class="k">监听</div><div class="v">'+(dn.addr||'—')+'</div></div>'+
+			'<div><div class="k">查询总数</div><div class="v">'+(dn.queries||0)+'</div></div>'+
+			'<div><div class="k">本地 / 经出口</div><div class="v">'+(dn.local_hits||0)+' / '+(dn.egress_hits||0)+'</div></div>'+
+			'<div><div class="k">失败</div><div class="v '+failCls+'">'+(dn.failures||0)+'</div></div>'+
+			'<div><div class="k">缓存 命中/未命中</div><div class="v">'+(dn.cache_hits||0)+' / '+(dn.cache_misses||0)+'</div></div>'+
+			'<div><div class="k">缓存条目</div><div class="v">'+(dn.cache_entries||0)+'</div></div>'+
+			'</div>';
+	}
+
+	var f=d.findings||[], fe=document.getElementById('s-find');
+	if(!run){ fe.innerHTML='<span class="slx-msg">服务未运行，请在「设置」中启用。</span>'; }
+	else if(!f.length){ fe.innerHTML='<span class="slx-ok">一切正常</span>'; }
+	else{
+		var h='';
+		f.forEach(function(x){
+			var cls=(x.severity==='致命')?'slx-bad':(x.severity==='降级'?'slx-warn':'slx-msg');
+			h+='<div style="margin-bottom:8px"><span class="'+cls+'">['+(x.severity||'')+'] '+
+				(x.title||'')+'</span>';
+			if(x.detail)h+='<div class="slx-msg">现象：'+x.detail+'</div>';
+			if(x.action)h+='<div class="slx-msg">处理：'+x.action+'</div>';
+			h+='</div>';
+		});
+		fe.innerHTML=h;
 	}
 }
-
-function slxPoll() {
-	var xhr = new XMLHttpRequest();
-	xhr.open('GET', '<%=url('admin/services/slx/status_json')%>?_=' + Date.now(), true);
-	xhr.onreadystatechange = function() {
-		if (xhr.readyState !== 4) return;
-		if (xhr.status !== 200) { slxRender({running:false}); return; }
-		try { slxRender(JSON.parse(xhr.responseText)); }
-		catch (e) { slxRender({running:false}); }
+function slxPoll(){
+	var x=new XMLHttpRequest();
+	x.open('GET','<%=url('admin/services/slx/status_json')%>?_='+Date.now(),true);
+	x.onreadystatechange=function(){
+		if(x.readyState!==4)return;
+		if(x.status!==200){slxRender({running:false});return;}
+		try{slxRender(JSON.parse(x.responseText));}catch(e){slxRender({running:false});}
 	};
-	xhr.send(null);
+	x.send(null);
 }
-
-slxPoll();
-setInterval(slxPoll, 3000);
+slxPoll(); setInterval(slxPoll,3000);
 //]]>
 </script>
 
