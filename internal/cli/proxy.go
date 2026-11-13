@@ -206,8 +206,14 @@ func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string
 		}
 		return
 	}
-	pick.ReportHealthWithReason(nodeID, false,
-		"出口链路失败："+probeErrPhrase(err), now)
+	// 短语是通用的「失败」时不再拼冒号 —— 否则状态页会显示成
+	// 「上次探测失败：出口链路失败：失败」（失败：失败，读着像卡壳）。
+	phrase := probeErrPhrase(err)
+	reason := "出口链路失败"
+	if phrase != "失败" {
+		reason += "：" + phrase
+	}
+	pick.ReportHealthWithReason(nodeID, false, reason, now)
 }
 
 func (c *proxyConnector) ConnectTCP(dst net.IP, port uint16) (net.Conn, bool, error) {

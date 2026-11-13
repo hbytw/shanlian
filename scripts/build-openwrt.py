@@ -436,10 +436,15 @@ function slxRender(d){
 	}else if(a.details && a.details.length){
 		var h='<div style="margin-bottom:8px"><span class="slx-ok">已接入 '+a.count+' 个</span>'+
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span>'+
-			'<span class="slx-msg">　按评分排序，第一行是当前最优</span></div>'+
+			'<span class="slx-msg">　按评分排序，第一个「当前」是实际在用的出口</span></div>'+
 			'<table class="slx-tbl"><thead><tr>'+
 			'<th>位置</th><th>节点</th><th>评分（拆解）</th><th>延迟</th><th>带宽</th><th>丢包</th><th>在线</th><th>状态</th>'+
 			'</tr></thead><tbody>';
+		// 「当前」= 第一个有资格参与选路的出口（熔断的即使分高也不是它在扛流量）
+		var curIdx=-1;
+		a.details.forEach(function(x, idx){
+			if(curIdx<0 && x.eligible!==false && x.breaker!=='熔断') curIdx=idx;
+		});
 		a.details.forEach(function(x, idx){
 			var state='正常', cls='slx-ok';
 			if(x.breaker === '熔断'){ state='熔断'; cls='slx-bad'; }
@@ -470,8 +475,8 @@ function slxRender(d){
 				   : x.uptime_seconds>=3600 ? Math.floor(x.uptime_seconds/3600)+'时'
 				   : Math.floor(x.uptime_seconds/60)+'分';
 			}
-			var rowCls = (idx === 0) ? ' class="slx-best"' : '';
-			h += '<tr'+rowCls+'><td>'+loc+(idx===0?' <span class="slx-tag">当前</span>':'')+'</td>'+
+			var rowCls = (idx === curIdx) ? ' class="slx-best"' : '';
+			h += '<tr'+rowCls+'><td>'+loc+(idx===curIdx?' <span class="slx-tag">当前</span>':'')+'</td>'+
 			     '<td class="slx-mono">'+x.id+'</td>'+
 			     scoreCell+
 			     '<td>'+rtt+'</td><td>'+bw+'</td><td>'+loss+'</td><td>'+up+'</td>'+
