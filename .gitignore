@@ -18,3 +18,6 @@
 # 本地环境
 *.local
 .env
+
+__pycache__/
+*.pyc
