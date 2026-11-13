@@ -140,7 +140,8 @@ type ChannelSummary struct {
 	// Streams 是这条通道当前打开的 yamux 流数（开流卡住的前兆指标）。
 	Streams int `json:"streams"`
 	// RTTMs / Succ / BWMbps 是该通道的实时探测指标（EWMA）：
-	// 往返时延、成功率（0~1）、吞吐（Mbps）。无样本时为兜底值。
+	// 往返时延、成功率（0~1）、吞吐（Mbps）。
+	// RTT/Succ 无样本时为兜底值；BW 无样本为 0（页面显示「—」）。
 	RTTMs  float64 `json:"rtt_ms"`
 	Succ   float64 `json:"succ"`
 	BWMbps float64 `json:"bw_mbps"`

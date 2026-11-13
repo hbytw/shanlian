@@ -653,6 +653,14 @@ function slxRender(d){
 			'<div class="slx-msg" style="margin-top:6px">在出口节点执行：'+
 			'<code>slx agent --gateway &lt;本机IP:11601&gt;</code></div>';
 	}else if(a.details && a.details.length){
+		// 出口的「带宽」列 = 该出口所有通道的**实时吞吐**聚合（10 秒结算的 EWMA）。
+		// 不再用出口级被动统计（无流量时是兜底 5M，一排假数）——
+		// 伟哥 2026-11-13：「应该是按实时速度计算带宽」。
+		var bwAgg = {};
+		(d.channels||[]).forEach(function(c){
+			var k = (c.node_id||'').substring(0,12);
+			bwAgg[k] = (bwAgg[k]||0) + (c.bw_mbps||0);
+		});
 		var h='<div style="margin-bottom:8px"><span class="slx-ok">已接入 '+a.count+' 个</span>'+
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span>'+
 			'<span class="slx-msg">　按评分排序，第一个「当前」是实际在用的出口</span></div>'+
@@ -675,7 +683,8 @@ function slxRender(d){
 				noteSub='<div class="slx-sub slx-msg">'+x.note+'</div>';
 			}
 			var rtt = x.rtt_ms > 0 ? Math.round(x.rtt_ms)+' ms' : '—';
-			var bw  = x.bw_mbps > 0 ? x.bw_mbps.toFixed(1)+' M' : '—';
+			var bwv = bwAgg[x.id] || 0;
+			var bw  = bwv >= 0.05 ? bwv.toFixed(1)+' M' : '—';
 			var loss= (x.loss > 0) ? (x.loss*100).toFixed(1)+'%' : '0%';
 			var loc = x.label || x.remote || '—';
 			// 状态的第二行：失败归因（熔断/失败原因 + 计数）
@@ -797,7 +806,7 @@ function slxRender(d){
 			var sr = (c.succ!==undefined && c.succ>0)
 				? ((c.succ*100).toFixed(1)+'%'+(c.succ<0.95?' <span class="slx-warn">↓</span>':''))
 				:'—';
-			var bwv = (c.bw_mbps>0)?(c.bw_mbps.toFixed(1)+' M'):'—';
+			var bwv = (c.bw_mbps>=0.05)?(c.bw_mbps.toFixed(1)+' M'):'—';
 			h+='<tr><td>'+loc+'</td><td class="slx-mono">'+short+'</td><td>'+kind+'</td>'+
 			   '<td class="slx-mono">'+(c.remote||'—')+'</td>'+
 			   '<td><strong>'+Number(c.score||0).toFixed(1)+'</strong></td>'+
@@ -807,7 +816,8 @@ function slxRender(d){
 		});
 		cel.innerHTML=h+'</tbody></table>'+
 			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。'+
-			'RTT/成功率/吞吐为该通道探测 EWMA（无样本时兜底 200ms / 50% / 5M）。流数持续偏高说明有开流卡住。</div>';
+			'RTT/成功率为探测 EWMA（无样本兜底 200ms / 50%）；吞吐=每 10 秒结算的实时速度，「—」表示近期无流量。'+
+			'流数持续偏高说明有开流卡住。</div>';
 	}
 
 	// —— DNS 卡 ——

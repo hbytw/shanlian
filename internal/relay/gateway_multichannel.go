@@ -117,6 +117,17 @@ func (e *ewma) get(fallback float64) float64 {
 	return e.value
 }
 
+// peek 返回 (当前值, 是否有过样本)。
+//
+// 供展示层区分「真实测量值」与「无数据」——
+// get(fallback) 会把兜底值当真值显示（状态页一排 5.0M 的根源，
+// 2026-11-13 伟哥问「为什么都是 5M 不是实际带宽」）。
+func (e *ewma) peek() (float64, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.value, e.valid
+}
+
 // reset 清空样本。
 func (e *ewma) reset() {
 	e.mu.Lock()
@@ -1045,7 +1056,8 @@ type ChannelInfo struct {
 	RTT float64 `json:"rtt_ms"`
 	// Succ 是该通道探测成功率（0~1，EWMA；无样本时兜底 0.5）。
 	Succ float64 `json:"succ"`
-	// BW 是该通道吞吐（Mbps，EWMA 结算；无样本时兜底 5）。
+	// BW 是该通道的实时吞吐（Mbps，10 秒结算的 EWMA；**无样本为 0**）。
+	// 0 = 近期没跑过流量，页面显示「——」——不拿兜底值冒充实测。
 	BW float64 `json:"bw_mbps"`
 }
 
@@ -1068,6 +1080,10 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 			if c.sess != nil {
 				streams = c.sess.NumStreams()
 			}
+			// BW 用 peek：无样本填 0（页面显示「—」），
+			// 不再用 get(5) 把兜底 5M 当真实带宽显示。
+			// RTT/Succ 保留兜底（探测周期性跑，几乎总有样本）。
+			bwv, _ := c.bw.peek()
 			out = append(out, ChannelInfo{
 				NodeID:  s.nodeID,
 				Kind:    c.Name(),
@@ -1079,7 +1095,7 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 				Streams: streams,
 				RTT:     c.rtt.get(200),
 				Succ:    c.succ.get(0.5),
-				BW:      c.bw.get(5),
+				BW:      bwv,
 			})
 		}
 	}
