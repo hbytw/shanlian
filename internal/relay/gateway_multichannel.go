@@ -128,6 +128,14 @@ func (e *ewma) peek() (float64, bool) {
 	return e.value, e.valid
 }
 
+// pendingBytes 返回尚未结算的上下行字节（诊断用：
+// pending>0 但 bw=0 ⇒ 结算没跑；pending=0 且 bw=0 ⇒ 字节没累加）。
+func (c *channel) pendingBytes() (up, down int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.upBytes, c.downBytes
+}
+
 // reset 清空样本。
 func (e *ewma) reset() {
 	e.mu.Lock()
@@ -1116,6 +1124,10 @@ type ChannelInfo struct {
 	// 方向按网关视角：up=客户端→出口（上传），down=出口→客户端（下载）。
 	BWUp   float64 `json:"bw_up"`
 	BWDown float64 `json:"bw_down"`
+	// PendingUp/PendingDown 是**尚未结算**的原始字节数（诊断字段）：
+	// pending>0 而 bw=0 ⇒ 结算没跑；都为 0 ⇒ 字节没累加（链路断）。
+	PendingUp   int64 `json:"pending_up,omitempty"`
+	PendingDown int64 `json:"pending_down,omitempty"`
 }
 
 // ChannelInfos 返回所有 agent 的通道状态。
@@ -1146,20 +1158,23 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 			bwv, _ := c.bw.peek()
 			upv, _ := c.bwUp.peek()
 			dnv, _ := c.bwDown.peek()
+			pup, pdn := c.pendingBytes()
 			out = append(out, ChannelInfo{
-				NodeID:  s.nodeID,
-				Kind:    c.Name(),
-				Remote:  c.remote,
-				Score:   c.score(now),
-				Primary: primary == c,
-				Open:    open,
-				Since:   c.since.Format(time.RFC3339),
-				Streams: streams,
-				RTT:     c.rtt.get(200),
-				Succ:    c.succ.get(0.5),
-				BW:      bwv,
-				BWUp:    upv,
-				BWDown:  dnv,
+				NodeID:      s.nodeID,
+				Kind:        c.Name(),
+				Remote:      c.remote,
+				Score:       c.score(now),
+				Primary:     primary == c,
+				Open:        open,
+				Since:       c.since.Format(time.RFC3339),
+				Streams:     streams,
+				RTT:         c.rtt.get(200),
+				Succ:        c.succ.get(0.5),
+				BW:          bwv,
+				BWUp:        upv,
+				BWDown:      dnv,
+				PendingUp:   pup,
+				PendingDown: pdn,
 			})
 		}
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -98,6 +99,33 @@ func TestReportConnectFailure_DeadlineDoesNotTrip(t *testing.T) {
 
 	if b := pick.BreakerOf("egA"); b != nil {
 		t.Fatal("拥塞超时不该创建熔断器")
+	}
+}
+
+// TestIsDeadlineErr_YamuxSameText 覆盖 2026-11-13 晚高峰现场：
+// yamux 自造的 "i/o deadline reached"（const.go，fmt.Errorf 无 %w）
+// 与 os.ErrDeadlineExceeded 文案相同、身份不同，errors.Is 认不出
+// ⇒ 200/200 全漏过排除、一分钟双出口假熔断。文案兜底必须接住。
+func TestIsDeadlineErr_YamuxSameText(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"yamux同文案", errors.New("i/o deadline reached"), true},
+		{"yamux同文案被包装", fmt.Errorf("打开复用流失败: %w", errors.New("i/o deadline reached")), true},
+		{"标准os超时", os.ErrDeadlineExceeded, true},
+		{"context超时", context.DeadlineExceeded, true},
+		{"普通EOF", errors.New("EOF"), false},
+		{"拒绝连接", errors.New("connect: connection refused"), false},
+	}
+	for _, c := range cases {
+		if got := isDeadlineErr(c.err); got != c.want {
+			t.Errorf("%s: isDeadlineErr=%v want %v", c.name, got, c.want)
+		}
+	}
+	if isDeadlineErr(nil) {
+		t.Error("nil 不该算超时")
 	}
 }
 

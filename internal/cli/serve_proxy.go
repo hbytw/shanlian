@@ -293,19 +293,21 @@ func collectProxyStatus(
 	// 通道状态：直连 / 兜底各自的评分与熔断状态。
 	for _, ci := range pp.gateway.ChannelInfos() {
 		s.Channels = append(s.Channels, ChannelSummary{
-			NodeID:  ci.NodeID,
-			Kind:    ci.Kind,
-			Remote:  ci.Remote,
-			Score:   ci.Score,
-			Primary: ci.Primary,
-			Open:    ci.Open,
-			Since:   ci.Since,
-			Streams: ci.Streams,
-			RTTMs:   ci.RTT,
-			Succ:    ci.Succ,
-			BWMbps:  ci.BW,
-			BWUp:    ci.BWUp,
-			BWDown:  ci.BWDown,
+			NodeID:      ci.NodeID,
+			Kind:        ci.Kind,
+			Remote:      ci.Remote,
+			Score:       ci.Score,
+			Primary:     ci.Primary,
+			Open:        ci.Open,
+			Since:       ci.Since,
+			Streams:     ci.Streams,
+			RTTMs:       ci.RTT,
+			Succ:        ci.Succ,
+			BWMbps:      ci.BW,
+			BWUp:        ci.BWUp,
+			BWDown:      ci.BWDown,
+			PendingUp:   ci.PendingUp,
+			PendingDown: ci.PendingDown,
 		})
 	}
 	if pp.dns != nil {

@@ -148,6 +148,10 @@ type ChannelSummary struct {
 	// BWUp / BWDown 是实时上行/下行速率（Mbps，10 秒结算、无样本 0）。
 	BWUp   float64 `json:"bw_up"`
 	BWDown float64 `json:"bw_down"`
+	// PendingUp / PendingDown 是尚未结算的原始字节（诊断：
+	// pending>0 而 bw=0 ⇒ 结算没跑；都 0 ⇒ 字节没累加）。
+	PendingUp   int64 `json:"pending_up,omitempty"`
+	PendingDown int64 `json:"pending_down,omitempty"`
 }
 
 // AgentDetail 是单台出口的实时指标。

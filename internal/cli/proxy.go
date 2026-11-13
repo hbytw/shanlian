@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -165,6 +166,26 @@ func (c *proxyConnector) connect(dst net.IP, port uint16, transport uint8) (net.
 	return wrapCounted(conn, nodeID, c.bw), false, nil
 }
 
+// isDeadlineErr 识别「超时 / 截止期」类错误。
+//
+// 为什么不能只用 errors.Is(err, os.ErrDeadlineExceeded)：
+// yamux 自己造了一个**同文案**错误（hashicorp/yamux@v0.1.2 const.go：
+// fmt.Errorf("i/o deadline reached")），与 os.ErrDeadlineExceeded
+// 文案一模一样但身份不同 —— errors.Is 认不出。
+// 2026-11-13 晚高峰现场：200/200 条该错误全部漏过排除、喂进熔断，
+// 一分钟内两台出口假熔断。文案兜底是为此加的。
+func isDeadlineErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "i/o deadline reached") ||
+		strings.Contains(msg, "deadline exceeded")
+}
+
 // reportConnectFailure 把一次建连失败分成两类，并分别记账。
 //
 // # 为什么必须分开
@@ -210,13 +231,14 @@ func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string
 		errors.Is(err, relay.ErrStreamOpenTimeout) ||
 		errors.Is(err, relay.ErrChannelSessionClosed) ||
 		errors.Is(err, relay.ErrSessionUnavailable) ||
-		errors.Is(err, os.ErrDeadlineExceeded) ||
-		errors.Is(err, context.DeadlineExceeded) {
-		// ★ 超时类（os/context DeadlineExceeded）单独说明 —— 2026-11-13 12:11 现场：
-		//   BT 大流把隧道 TCP 塞满 ⇒ 建连握手帧排在 bulk 后面 ⇒ 15 秒握不上手
-		//   ⇒ 「打开复用流失败: i/o deadline reached」被当成出口故障喂进熔断
-		//   ⇒ 香港/日本同时假熔断，而它们的 L1 探测 100% 成功、0% 丢包。
-		//   拥塞超时是隧道的负载问题，不是出口的健康问题；
+		isDeadlineErr(err) {
+		// ★ 超时类单独说明 —— 2026-11-13 现场：
+		//   12:11 BT 大流塞满隧道 ⇒ 握手帧排队 ⇒ 15 秒握不上手（os 版超时）
+		//   19:5x 晚高峰跨境拥塞 ⇒ 同样 15 秒握手超时，但这次错误是
+		//   **yamux 自造的同文案错误**（const.go: fmt.Errorf("i/o deadline reached")），
+		//   与 os.ErrDeadlineExceeded 文案相同、身份不同，errors.Is 认不出
+		//   ⇒ 200/200 全喂进熔断，一分钟双出口假熔断。
+		//   拥塞超时是隧道/链路的负载问题，不是出口的健康问题；
 		//   出口真挂了由 L2 熔断与 L1 丢包（评分）负责兜底。
 		if log != nil {
 			log.Debug("通道层/本机过载/拥塞超时（不计入出口熔断）",
@@ -589,8 +611,7 @@ func (c *proxyConnector) PingHost(dst net.IP) bool {
 			errors.Is(err, relay.ErrStreamOpenTimeout) ||
 			errors.Is(err, relay.ErrChannelSessionClosed) ||
 			errors.Is(err, relay.ErrSessionUnavailable) ||
-			errors.Is(err, os.ErrDeadlineExceeded) ||
-			errors.Is(err, context.DeadlineExceeded) {
+			isDeadlineErr(err) {
 			c.picker.ReportTargetFailure(nodeID)
 			return false
 		}
