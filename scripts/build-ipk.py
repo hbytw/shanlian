@@ -288,8 +288,10 @@ function index()
 
 	entry({"admin", "services", "slx", "status"}, template("slx/status"), _("运行状态"), 10)
 	entry({"admin", "services", "slx", "config"}, cbi("slx"), _("设置"), 20)
+	entry({"admin", "services", "slx", "logs"}, template("slx/logs"), _("日志"), 40)
 
 	entry({"admin", "services", "slx", "status_json"}, call("action_status")).leaf = true
+	entry({"admin", "services", "slx", "logs_json"}, call("action_logs")).leaf = true
 end
 
 -- 状态页通过这个接口拉 JSON，避免在 htm 里做复杂逻辑
@@ -304,6 +306,88 @@ function action_status()
 	end
 	http.prepare_content("application/json")
 	http.write(raw)
+end
+
+-- 日志页数据：解析 logread，SLX 的 JSON 行还原成结构化中文日志。
+--
+-- 为什么用正则抽字段而不是 JSON 库：日志行的字段都是扁平字符串
+-- （time/level/msg/event/node_id/err），正则零依赖、必然可用；
+-- luci.jsonc 在部分固件上缺失，为一个日志页引入解析库不值。
+function action_logs()
+	local http = require "luci.http"
+
+	local level = http.formvalue("level") or "all"   -- all / WARN / ERROR
+	local cat   = http.formvalue("cat") or "all"     -- all / 隧道 / 探测 / 熔断 / DNS / 分流 / 数据面 / 系统 / 其他
+	local limit = tonumber(http.formvalue("limit") or "300") or 300
+	if limit < 20 then limit = 20 end
+	if limit > 1000 then limit = 1000 end
+
+	local function jf(s, k)
+		return s:match('"' .. k .. '":"([^"]*)"')
+	end
+
+	-- 事件前缀 → 中文分类
+	local function classify(ev, msg)
+		if not ev or ev == "" then
+			if msg and (msg:find("熔断") or msg:find("计入出口")) then return "熔断" end
+			return "其他"
+		end
+		if ev:find("^relay%.") then return "隧道" end
+		if ev:find("^probe%.") then return "探测" end
+		if ev:find("plane.stats") then return "数据面" end
+		if ev:find("^dns") then return "DNS" end
+		if ev:find("dispatch") or ev:find("split") then return "分流" end
+		return "其他"
+	end
+
+	local f = io.popen(string.format("logread 2>/dev/null | tail -n %d", limit))
+	if not f then
+		http.write_json({ items = {}, err = "logread 不可用" })
+		return
+	end
+
+	local items = {}
+	for line in f:lines() do
+		local rec
+		local payload = line:match("slx%[%d+%]:%s*(.+)$")
+		if payload and payload:sub(1, 1) == "{" then
+			local msg = jf(payload, "msg")
+			if msg then
+				local ev = jf(payload, "event") or ""
+				local ts = (jf(payload, "time") or ""):match("T([%d:]+)")
+				rec = {
+					t = ts or "",
+					lv = jf(payload, "level") or "INFO",
+					cat = classify(ev, msg),
+					msg = msg,
+					ev = ev,
+					node = jf(payload, "node_id") or "",
+					err = jf(payload, "err") or "",
+				}
+			end
+		end
+		if not rec then
+			-- 系统日志行（zerotier/sshd 等）：剥掉 syslog 时间前缀
+			local ts = line:match("^%a+%s+%a+%s+%d+%s+(%d%d:%d%d:%d%d)")
+			local msg = line:gsub("^%a+%s+%a+%s+%d+%s+%d%d:%d%d:%d%d%s+%d%d%d%d%s+", "")
+			local lv = "INFO"
+			if msg:find("err") then lv = "ERROR"
+			elseif msg:find("warn") then lv = "WARN" end
+			rec = { t = ts or "", lv = lv, cat = "系统", msg = msg, ev = "", node = "", err = "" }
+		end
+
+		-- 过滤：级别、分类；「数据面」默认藏（plane.stats 每 5 秒一条，纯噪音）
+		if (level == "all" or rec.lv == level)
+			and (cat ~= "all" and rec.cat == cat or (cat == "all" and rec.cat ~= "数据面")) then
+			items[#items + 1] = rec
+		end
+	end
+	f:close()
+
+	-- 新的在前
+	local out = {}
+	for i = #items, 1, -1 do out[#out + 1] = items[i] end
+	http.write_json({ items = out, total = #out, now = os.date("%H:%M:%S") })
 end
 """)
 
@@ -769,6 +853,131 @@ function slxPoll(){
 	x.send(null);
 }
 slxPoll(); setInterval(slxPoll,3000);
+//]]>
+</script>
+
+<%+footer%>
+""")
+
+# ---------------- LuCI 日志页（view） ----------------
+write("/usr/lib/lua/luci/view/slx/logs.htm", r"""<%+header%>
+
+<style>
+.slx-card{background:#fff;border-radius:6px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.slx-card h3{margin:0 0 12px;font-size:15px;color:#333;border-left:3px solid #2196f3;padding-left:8px}
+.slx-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+.slx-bar select,.slx-bar button{padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;background:#fff}
+.slx-bar button{background:#2196f3;color:#fff;border:0;cursor:pointer}
+.slx-bar button:hover{background:#1976d2}
+.slx-bar .slx-auto{font-size:13px;color:#666;display:flex;align-items:center;gap:4px}
+.slx-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.slx-tbl th{text-align:left;padding:6px 8px;color:#888;font-weight:600;border-bottom:2px solid #eee;font-size:12px}
+.slx-tbl td{padding:5px 8px;border-bottom:1px solid #f5f5f5;vertical-align:top}
+.slx-tbl tr:last-child td{border-bottom:0}
+.slx-mono{font-family:monospace;color:#555;white-space:nowrap}
+.slx-ok{color:#4caf50}.slx-bad{color:#f44336}.slx-warn{color:#ff9800}.slx-msg{color:#999;font-size:13px}
+.slx-cat{display:inline-block;border-radius:3px;padding:1px 6px;font-size:11px;background:#e3f2fd;color:#1565c0}
+.slx-cat.c-tunnel{background:#e8f5e9;color:#2e7d32}
+.slx-cat.c-probe{background:#f3e5f5;color:#6a1b9a}
+.slx-cat.c-break{background:#fbe9e7;color:#bf360c}
+.slx-cat.c-sys{background:#eceff1;color:#455a64}
+.slx-err{font-size:11px;color:#c62828;margin-top:2px}
+.slx-sub{font-size:11px;color:#999;margin-top:2px}
+</style>
+
+<div class="cbi-map">
+<h2 name="content">闪连网关 · 日志</h2>
+
+<div class="slx-card">
+	<h3>系统日志（中文）</h3>
+	<div class="slx-bar">
+		<select id="f-cat">
+			<option value="all">全部分类</option>
+			<option value="隧道">隧道（relay）</option>
+			<option value="探测">探测（L1/L2）</option>
+			<option value="熔断">熔断 / 健康</option>
+			<option value="DNS">DNS</option>
+			<option value="分流">分流</option>
+			<option value="数据面">数据面统计</option>
+			<option value="系统">系统（非网关）</option>
+			<option value="其他">其他</option>
+		</select>
+		<select id="f-level">
+			<option value="all">全部级别</option>
+			<option value="WARN">警告 WARN</option>
+			<option value="ERROR">错误 ERROR</option>
+			<option value="INFO">信息 INFO</option>
+		</select>
+		<select id="f-limit">
+			<option value="200">最近 200 条</option>
+			<option value="500" selected>最近 500 条</option>
+			<option value="1000">最近 1000 条</option>
+		</select>
+		<button onclick="slxLogsLoad()">刷新</button>
+		<label class="slx-auto"><input type="checkbox" id="f-auto" checked> 每 5 秒自动刷新</label>
+		<span class="slx-msg" id="l-meta">读取中…</span>
+	</div>
+	<table class="slx-tbl">
+		<thead><tr><th style="width:80px">时间</th><th style="width:60px">级别</th>
+			<th style="width:70px">分类</th><th>消息</th><th style="width:150px">节点 / 事件</th></tr></thead>
+		<tbody id="l-body"><tr><td colspan="5" class="slx-msg">读取中…</td></tr></tbody>
+	</table>
+</div>
+</div>
+
+<script type="text/javascript">
+//<![CDATA[
+var slxLogCatCls = {'隧道':'c-tunnel','探测':'c-probe','熔断':'c-break','系统':'c-sys'};
+function slxLogsRender(d){
+	var items = d.items || [];
+	var body = document.getElementById('l-body');
+	document.getElementById('l-meta').textContent =
+		(items.length ? items.length + ' 条' : '无匹配') + ' · 更新于 ' + (d.now || '—');
+	if(!items.length){
+		body.innerHTML = '<tr><td colspan="5" class="slx-msg">没有匹配的日志</td></tr>';
+		return;
+	}
+	var h = '';
+	items.forEach(function(r){
+		var lvCls = r.lv==='ERROR'?'slx-bad':(r.lv==='WARN'?'slx-warn':'slx-msg');
+		var catCls = 'slx-cat' + (slxLogCatCls[r.cat] ? ' ' + slxLogCatCls[r.cat] : '');
+		var detail = '';
+		if(r.err) detail += '<div class="slx-err">错误：'+r.err+'</div>';
+		if(r.ev) detail += '<div class="slx-sub">'+r.ev+'</div>';
+		h += '<tr><td class="slx-mono">'+(r.t||'—')+'</td>'+
+		     '<td class="'+lvCls+'">'+r.lv+'</td>'+
+		     '<td><span class="'+catCls+'">'+r.cat+'</span></td>'+
+		     '<td>'+r.msg+detail+'</td>'+
+		     '<td class="slx-mono">'+(r.node||'—')+'</td></tr>';
+	});
+	body.innerHTML = h;
+}
+function slxLogsLoad(){
+	var x = new XMLHttpRequest();
+	var q = '?level=' + encodeURIComponent(document.getElementById('f-level').value) +
+	       '&cat=' + encodeURIComponent(document.getElementById('f-cat').value) +
+	       '&limit=' + document.getElementById('f-limit').value +
+	       '&_=' + Date.now();
+	x.open('GET', '<%=url('admin/services/slx/logs_json')%>' + q, true);
+	x.onreadystatechange = function(){
+		if(x.readyState !== 4) return;
+		if(x.status !== 200){
+			document.getElementById('l-meta').textContent = '加载失败（未登录？）';
+			return;
+		}
+		try{ slxLogsRender(JSON.parse(x.responseText)); }catch(e){
+			document.getElementById('l-meta').textContent = '解析失败';
+		}
+	};
+	x.send(null);
+}
+['f-cat','f-level','f-limit'].forEach(function(id){
+	document.getElementById(id).addEventListener('change', slxLogsLoad);
+});
+slxLogsLoad();
+setInterval(function(){
+	if(document.getElementById('f-auto').checked) slxLogsLoad();
+}, 5000);
 //]]>
 </script>
 
