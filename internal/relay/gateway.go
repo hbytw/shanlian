@@ -686,7 +686,11 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 		}
 		// 成功：直接返回，不碰探测计数 ✅✅
 		//（通道评分由专用探测维护，数据路径的成功会把 rtt 拉成 0 ✅⚠️）
-		return conn, nil
+		//
+		// 包一层 chanConn：业务流量的字节在这里记到通道上 ——
+		// 实时上下行流量的**唯一数据源**（此前 addBytes 是死代码没人调，
+		// 通道吞吐永远是兜底值；2026-11-13 伟哥发现开视频页面仍显示空）。
+		return &chanConn{Conn: conn, ch: sel}, nil
 	}
 
 	// 所有候选都失败

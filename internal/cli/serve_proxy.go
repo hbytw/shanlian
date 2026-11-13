@@ -304,6 +304,8 @@ func collectProxyStatus(
 			RTTMs:   ci.RTT,
 			Succ:    ci.Succ,
 			BWMbps:  ci.BW,
+			BWUp:    ci.BWUp,
+			BWDown:  ci.BWDown,
 		})
 	}
 	if pp.dns != nil {

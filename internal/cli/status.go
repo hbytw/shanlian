@@ -141,10 +141,13 @@ type ChannelSummary struct {
 	Streams int `json:"streams"`
 	// RTTMs / Succ / BWMbps 是该通道的实时探测指标（EWMA）：
 	// 往返时延、成功率（0~1）、吞吐（Mbps）。
-	// RTT/Succ 无样本时为兜底值；BW 无样本为 0（页面显示「—」）。
+	// RTT/Succ 无样本时为兜底值；BW/BWUp/BWDown 无样本为 0（页面显示「—」）。
 	RTTMs  float64 `json:"rtt_ms"`
 	Succ   float64 `json:"succ"`
 	BWMbps float64 `json:"bw_mbps"`
+	// BWUp / BWDown 是实时上行/下行速率（Mbps，10 秒结算、无样本 0）。
+	BWUp   float64 `json:"bw_up"`
+	BWDown float64 `json:"bw_down"`
 }
 
 // AgentDetail 是单台出口的实时指标。

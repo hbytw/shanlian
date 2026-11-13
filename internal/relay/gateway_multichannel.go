@@ -281,11 +281,18 @@ type channel struct {
 	l1probe *yamux.Stream
 
 	// 通道评分用的指标。
-	mu      sync.Mutex
-	rtt     *ewma
-	succ    *ewma
-	bw      *ewma
-	bytes   int64
+	mu    sync.Mutex
+	rtt   *ewma
+	succ  *ewma
+	bw    *ewma
+	bytes int64 // 双向合计（结算用）
+	// upBytes/downBytes 是业务连接的上行/下行累计（实时流量的数据源）。
+	// 方向按网关视角：up = 客户端→出口（上传），down = 出口→客户端（下载）。
+	upBytes   int64
+	downBytes int64
+	// bwUp/bwDown 是上下行的实时速率 EWMA（10 秒结算）。
+	bwUp    *ewma
+	bwDown  *ewma
 	bytesAt time.Time
 
 	// inflight 是这条连接上在途的业务流数（负载均衡用）。
@@ -309,6 +316,8 @@ func newChannel(kind ChannelKind, conn net.Conn, sess *yamux.Session, remote str
 		rtt:     newEWMA(0.3),
 		succ:    newEWMA(0.3),
 		bw:      newEWMA(0.3),
+		bwUp:    newEWMA(0.3),
+		bwDown:  newEWMA(0.3),
 		bytesAt: time.Now(),
 		breaker: newChannelBreaker(),
 	}
@@ -316,6 +325,33 @@ func newChannel(kind ChannelKind, conn net.Conn, sess *yamux.Session, remote str
 
 // Name 返回通道名。
 func (c *channel) Name() string { return string(c.kind) }
+
+// chanConn 是包在业务连接外面的字节计数器。
+//
+// Read = 出口→客户端（下行），Write = 客户端→出口（上行）。
+// 实时上下行流量全靠它喂给 channel 的 upBytes/downBytes ——
+// 没有它，settleBW 结算的永远是 0（2026-11-13 的教训：
+// addBytes 定义了却没人调，页面带宽列永远空/兜底）。
+type chanConn struct {
+	net.Conn
+	ch *channel
+}
+
+func (cc *chanConn) Read(p []byte) (int, error) {
+	n, err := cc.Conn.Read(p)
+	if n > 0 {
+		cc.ch.addDown(int64(n))
+	}
+	return n, err
+}
+
+func (cc *chanConn) Write(p []byte) (int, error) {
+	n, err := cc.Conn.Write(p)
+	if n > 0 {
+		cc.ch.addUp(int64(n))
+	}
+	return n, err
+}
 
 // Inflight 返回在途流数。
 func (c *channel) Inflight() int64 { return c.inflight.Load() }
@@ -344,10 +380,19 @@ func (c *channel) recordProbe(ok bool, rtt time.Duration, now time.Time) {
 	c.breaker.Record(ok, now)
 }
 
-// addBytes 累计吞吐字节数。
-func (c *channel) addBytes(n int64) {
+// addUp 累计上行业务字节（客户端 → 出口）。
+func (c *channel) addUp(n int64) {
 	c.mu.Lock()
 	c.bytes += n
+	c.upBytes += n
+	c.mu.Unlock()
+}
+
+// addDown 累计下行业务字节（出口 → 客户端）。
+func (c *channel) addDown(n int64) {
+	c.mu.Lock()
+	c.bytes += n
+	c.downBytes += n
 	c.mu.Unlock()
 }
 
@@ -371,7 +416,11 @@ func (c *channel) score(now time.Time) float64 {
 	return 100 * (0.45*succ + 0.30*sRTT + 0.25*sBW)
 }
 
-// settleBW 结算一次吞吐（Mbps）。
+// settleBW 结算一次吞吐（Mbps），合计与上/下行分开结算。
+//
+// ★ 结算时机：ChannelInfos()（状态快照每 5 秒来一次）+ 探测周期 ——
+//
+//	借快照周期当结算节拍，页面拉到的数据 ≤10 秒新鲜，无需单独 ticker。
 func (c *channel) settleBW(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -380,8 +429,12 @@ func (c *channel) settleBW(now time.Time) {
 		return
 	}
 	mbps := float64(c.bytes*8) / 1000 / 1000 / elapsed
+	up := float64(c.upBytes*8) / 1000 / 1000 / elapsed
+	down := float64(c.downBytes*8) / 1000 / 1000 / elapsed
 	c.bw.Update(mbps)
-	c.bytes = 0
+	c.bwUp.Update(up)
+	c.bwDown.Update(down)
+	c.bytes, c.upBytes, c.downBytes = 0, 0, 0
 	c.bytesAt = now
 }
 
@@ -1059,6 +1112,10 @@ type ChannelInfo struct {
 	// BW 是该通道的实时吞吐（Mbps，10 秒结算的 EWMA；**无样本为 0**）。
 	// 0 = 近期没跑过流量，页面显示「——」——不拿兜底值冒充实测。
 	BW float64 `json:"bw_mbps"`
+	// BWUp/BWDown 是上行/下行的实时速率（Mbps，同样 10 秒结算、无样本 0）。
+	// 方向按网关视角：up=客户端→出口（上传），down=出口→客户端（下载）。
+	BWUp   float64 `json:"bw_up"`
+	BWDown float64 `json:"bw_down"`
 }
 
 // ChannelInfos 返回所有 agent 的通道状态。
@@ -1080,10 +1137,15 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 			if c.sess != nil {
 				streams = c.sess.NumStreams()
 			}
-			// BW 用 peek：无样本填 0（页面显示「—」），
+			// ★ 结算节拍 = 快照周期（每 5 秒来一次，内部有 ≥10 秒门槛）
+			//   —— 页面拉到的上下行是 ≤10 秒新鲜的实时值。
+			c.settleBW(now)
+			// BW 系列用 peek：无样本填 0（页面显示「—」），
 			// 不再用 get(5) 把兜底 5M 当真实带宽显示。
 			// RTT/Succ 保留兜底（探测周期性跑，几乎总有样本）。
 			bwv, _ := c.bw.peek()
+			upv, _ := c.bwUp.peek()
+			dnv, _ := c.bwDown.peek()
 			out = append(out, ChannelInfo{
 				NodeID:  s.nodeID,
 				Kind:    c.Name(),
@@ -1096,6 +1158,8 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 				RTT:     c.rtt.get(200),
 				Succ:    c.succ.get(0.5),
 				BW:      bwv,
+				BWUp:    upv,
+				BWDown:  dnv,
 			})
 		}
 	}

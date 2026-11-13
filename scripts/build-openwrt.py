@@ -518,19 +518,20 @@ function slxRender(d){
 			'<div class="slx-msg" style="margin-top:6px">在出口节点执行：'+
 			'<code>slx agent --gateway &lt;本机IP:11601&gt;</code></div>';
 	}else if(a.details && a.details.length){
-		// 出口的「带宽」列 = 该出口所有通道的**实时吞吐**聚合（10 秒结算的 EWMA）。
-		// 不再用出口级被动统计（无流量时是兜底 5M，一排假数）——
-		// 伟哥 2026-11-13：「应该是按实时速度计算带宽」。
-		var bwAgg = {};
+		// 出口的「流量」列 = 该出口所有通道的**实时上/下行速率**聚合
+		//（业务连接字节 → 10 秒结算的 EWMA）。
+		// 伟哥 2026-11-13：「显示实时上下行流量」——按实时流量算，不跑测速。
+		var upAgg = {}, dnAgg = {};
 		(d.channels||[]).forEach(function(c){
 			var k = (c.node_id||'').substring(0,12);
-			bwAgg[k] = (bwAgg[k]||0) + (c.bw_mbps||0);
+			upAgg[k] = (upAgg[k]||0) + (c.bw_up||0);
+			dnAgg[k] = (dnAgg[k]||0) + (c.bw_down||0);
 		});
 		var h='<div style="margin-bottom:8px"><span class="slx-ok">已接入 '+a.count+' 个</span>'+
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span>'+
 			'<span class="slx-msg">　按评分排序，第一个「当前」是实际在用的出口</span></div>'+
 			'<table class="slx-tbl"><thead><tr>'+
-			'<th>位置</th><th>节点</th><th>评分（拆解）</th><th>延迟</th><th>带宽</th><th>丢包</th><th>在线</th><th>状态</th>'+
+			'<th>位置</th><th>节点</th><th>评分（拆解）</th><th>延迟</th><th>流量 ↑↓</th><th>丢包</th><th>在线</th><th>状态</th>'+
 			'</tr></thead><tbody>';
 		// 「当前」= 第一个有资格参与选路的出口（熔断的即使分高也不是它在扛流量）
 		var curIdx=-1;
@@ -548,8 +549,10 @@ function slxRender(d){
 				noteSub='<div class="slx-sub slx-msg">'+x.note+'</div>';
 			}
 			var rtt = x.rtt_ms > 0 ? Math.round(x.rtt_ms)+' ms' : '—';
-			var bwv = bwAgg[x.id] || 0;
-			var bw  = bwv >= 0.05 ? bwv.toFixed(1)+' M' : '—';
+			var uv = upAgg[x.id] || 0, dv = dnAgg[x.id] || 0;
+			var bw = (uv >= 0.05 || dv >= 0.05)
+				? ('↑'+uv.toFixed(1)+' ↓'+dv.toFixed(1))
+				: '—';
 			var loss= (x.loss > 0) ? (x.loss*100).toFixed(1)+'%' : '0%';
 			var loc = x.label || x.remote || '—';
 			// 状态的第二行：失败归因（熔断/失败原因 + 计数）
@@ -585,7 +588,7 @@ function slxRender(d){
 			'带宽分 = bw/(bw+50Mbps)（软上限 50M）；延迟分 = 100/(100+延迟ms)；丢包分 = 1−丢包率。<br>'+
 			'<b>为什么普遍 30-40 分</b>：丢包 0% 拿满 20 分；跨境延迟 100-600ms 只拿 9-18 分；'+
 			'带宽是被动统计（通常几 Mbps）只拿 1-4 分。分数看相对不看绝对 —— 选路只比谁高。<br>'+
-			'评分越高越优先；延迟/带宽/丢包为实时实测值。</div>';
+			'评分越高越优先；延迟/流量/丢包为实时实测值（流量=↑上行 ↓下行，单位 Mbps）。</div>';
 	}else{
 		var h='<span class="slx-ok">已接入 '+a.count+' 个</span>'+
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span><div style="margin-top:6px">';
@@ -655,7 +658,7 @@ function slxRender(d){
 		(a.details||[]).forEach(function(x){ if(x.label) lbl[x.id]=x.label; });
 		var h='<table class="slx-tbl"><thead><tr>'+
 			'<th>位置</th><th>出口</th><th>类型</th><th>对端</th><th>评分</th>'+
-			'<th>RTT</th><th>成功率</th><th>吞吐</th>'+
+			'<th>RTT</th><th>成功率</th><th>流量 ↑↓</th>'+
 			'<th>角色</th><th>状态</th><th>流数</th><th>在线</th>'+
 			'</tr></thead><tbody>';
 		chs.forEach(function(c){
@@ -671,7 +674,10 @@ function slxRender(d){
 			var sr = (c.succ!==undefined && c.succ>0)
 				? ((c.succ*100).toFixed(1)+'%'+(c.succ<0.95?' <span class="slx-warn">↓</span>':''))
 				:'—';
-			var bwv = (c.bw_mbps>=0.05)?(c.bw_mbps.toFixed(1)+' M'):'—';
+			var uv=c.bw_up||0, dv=c.bw_down||0;
+			var bwv = (uv>=0.05||dv>=0.05)
+				? ('↑'+uv.toFixed(1)+' ↓'+dv.toFixed(1))
+				: '—';
 			h+='<tr><td>'+loc+'</td><td class="slx-mono">'+short+'</td><td>'+kind+'</td>'+
 			   '<td class="slx-mono">'+(c.remote||'—')+'</td>'+
 			   '<td><strong>'+Number(c.score||0).toFixed(1)+'</strong></td>'+
@@ -681,7 +687,7 @@ function slxRender(d){
 		});
 		cel.innerHTML=h+'</tbody></table>'+
 			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。'+
-			'RTT/成功率为探测 EWMA（无样本兜底 200ms / 50%）；吞吐=每 10 秒结算的实时速度，「—」表示近期无流量。'+
+			'RTT/成功率为探测 EWMA（无样本兜底 200ms / 50%）；流量=实时 ↑上行 ↓下行（10 秒结算，「—」表示近期无流量）。'+
 			'流数持续偏高说明有开流卡住。</div>';
 	}
 
