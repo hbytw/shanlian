@@ -1024,6 +1024,12 @@ type ChannelInfo struct {
 	// 没有超时（对端不确认就永久阻塞）。流数异常膨胀 ⇒
 	// 说明有开流卡住没回收 ⇒ 这正是「数据面永久卡死」的前兆。
 	Streams int `json:"streams"`
+	// RTT 是该通道探测往返时延（EWMA，毫秒；无样本时兜底 200）。
+	RTT float64 `json:"rtt_ms"`
+	// Succ 是该通道探测成功率（0~1，EWMA；无样本时兜底 0.5）。
+	Succ float64 `json:"succ"`
+	// BW 是该通道吞吐（Mbps，EWMA 结算；无样本时兜底 5）。
+	BW float64 `json:"bw_mbps"`
 }
 
 // ChannelInfos 返回所有 agent 的通道状态。
@@ -1054,6 +1060,9 @@ func (g *Gateway) ChannelInfos() []ChannelInfo {
 				Open:    open,
 				Since:   c.since.Format(time.RFC3339),
 				Streams: streams,
+				RTT:     c.rtt.get(200),
+				Succ:    c.succ.get(0.5),
+				BW:      c.bw.get(5),
 			})
 		}
 	}

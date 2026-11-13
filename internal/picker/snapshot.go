@@ -44,9 +44,16 @@ func (s *Selector) SnapshotState(candidates []string, now time.Time) Snapshot {
 			continue
 		}
 		sc := Score(rtt, bw, loss, aff, weights)
+		bwP, rttP, lossP := ScoreParts(rtt, bw, loss, weights)
+		uptime := int64(0)
+		if since, ok := s.onlineSince[id]; ok {
+			uptime = int64(now.Sub(since).Seconds())
+		}
 		st := Scored{
 			NodeID: id, Score: round1(sc), RTTMS: round1(rtt),
 			BWMbps: round1(bw), Loss: round3(loss), Affinity: aff, Eligible: true,
+			ScoreBW: round1(bwP), ScoreRTT: round1(rttP), ScoreLoss: round1(lossP),
+			UptimeSeconds:  uptime,
 			TargetFailures: s.targetFailures[id],
 			LinkFailures:   s.linkFailures[id],
 			LinkReason:     s.linkReason[id],

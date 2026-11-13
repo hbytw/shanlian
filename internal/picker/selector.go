@@ -43,7 +43,14 @@ type Scored struct {
 	BWMbps   float64 `json:"bw_mbps"`
 	Loss     float64 `json:"loss"`
 	Affinity bool    `json:"affinity"`
-	Breaker  string  `json:"breaker"`
+	// 评分拆解：三个维度各自的加权贡献（之和 = 加亲和前的 Score）。
+	// 状态页用它解释「为什么只有 30-40 分」—— 带宽维度通常只值几分。
+	ScoreBW   float64 `json:"score_bw"`
+	ScoreRTT  float64 `json:"score_rtt"`
+	ScoreLoss float64 `json:"score_loss"`
+	// UptimeSeconds 是该出口本次接入以来的秒数（未登记为 0）。
+	UptimeSeconds int64  `json:"uptime_seconds,omitempty"`
+	Breaker       string `json:"breaker"`
 	// BreakerReason 是最近一次失败的简短原因（只在熔断/试探时展示）。
 	// 例："L2 连不上 1.1.1.1（超时）"。
 	BreakerReason string `json:"breaker_reason,omitempty"`
@@ -636,10 +643,17 @@ func (s *Selector) pick(dst net.IP, destKey string, candidates []string, now tim
 			eligible = false
 		}
 
+		bwP, rttP, lossP := ScoreParts(rtt, bw, loss, weights)
+		uptime := int64(0)
+		if since, ok := s.onlineSince[id]; ok {
+			uptime = int64(now.Sub(since).Seconds())
+		}
 		st := Scored{
 			NodeID: id, Score: round1(sc), RTTMS: round1(rtt), BWMbps: round1(bw),
 			Loss: round3(loss), Affinity: aff, Breaker: brName,
 			BreakerReason: brReason, Eligible: eligible,
+			ScoreBW: round1(bwP), ScoreRTT: round1(rttP), ScoreLoss: round1(lossP),
+			UptimeSeconds:  uptime,
 			TargetFailures: s.targetFailures[id],
 			LinkFailures:   s.linkFailures[id],
 			LinkReason:     s.linkReason[id],

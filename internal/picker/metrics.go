@@ -291,6 +291,36 @@ func ScoreOf(q *Quality, w Weights) float64 {
 	return Score(rtt, bw, loss, q.Affinity, w)
 }
 
+// ScoreParts 返回评分的各维度贡献（三项之和 = 未加亲和前的总分）。
+//
+// 用途：状态页把「34.1 分是怎么来的」拆开显示 ——
+// 用户看到 30-40 分会疑惑为什么不满分，拆开就能看到
+// 「带宽只贡献了 2 分」（被动统计到几 Mbps，软上限 50M）。
+//
+// 与 Score 用同一套归一化与钳制逻辑，保证 parts 之和 + 亲和 = Score。
+func ScoreParts(rttMS, bwMbps, loss float64, w Weights) (bwPart, rttPart, lossPart float64) {
+	w = w.normalized()
+	if rttMS < 0 {
+		rttMS = 0
+	}
+	if bwMbps < 0 || math.IsNaN(bwMbps) {
+		bwMbps = 0
+	}
+	if math.IsInf(bwMbps, 1) {
+		bwMbps = w.BRefMbps
+	}
+	if loss < 0 {
+		loss = 0
+	}
+	if loss > 1 {
+		loss = 1
+	}
+	sBW := bwMbps / (bwMbps + w.BRefMbps)
+	sRTT := w.RRefMS / (w.RRefMS + rttMS)
+	sLoss := 1 - loss
+	return 100 * w.BW * sBW, 100 * w.RTT * sRTT, 100 * w.Loss * sLoss
+}
+
 // ScoreWithTransport 在 Score 的基础上多带一个「通道健康度」维度。
 //
 // transport 是 0~100 的通道分（relay 侧的通道评分喂进来）。

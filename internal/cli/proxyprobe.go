@@ -36,7 +36,106 @@ const (
 	// 会跟着 agent 数一起涨（实测堆到过 4 万个）。
 	// 4 个足够把 6 台 agent 的探测压到两轮以内。
 	l1ProbeConcurrency = 4
+
+	// —— 自适应探测频率（2026-11-13 伟哥要求：正常降频、异常升频、有个度）——
+	//
+	// l1BaseInterval 是高频探测间隔（与旧行为一致，也是**频率上限**）：
+	// 出问题时回到这个节奏，不会比以前更吵。
+	l1BaseInterval = 2 * time.Second
+	// l1SlowInterval 是健康**备用**节点的降频间隔。
+	//
+	// 主节点保持 l1BaseInterval（它承载业务，劣化必须立刻感知）；
+	// 备用节点连续 l1HealthyStreak 次成功后降到这个间隔。
+	// 取 20 秒 = 降频 10 倍：6 台 agent 的总探测量从 3 次/秒降到约 0.75 次/秒。
+	// 自愈检测延迟上界也是 20 秒（健康节点突然坏 → 最多 20 秒后才发现）。
+	l1SlowInterval = 20 * time.Second
+	// l1HealthyStreak 是连续成功多少次才降频（防止抖动边缘反复横跳）。
+	l1HealthyStreak = 5
 )
+
+// l1Sched 是 L1 探测的自适应调度器。
+//
+// # 规则（对应需求：正常节点减少探测，异常节点加大探测，但有个度）
+//
+//   - 主节点（当前承载业务的）：永远 l1BaseInterval（2 秒）
+//   - 主节点最近一次探测失败：**全员**回到 l1BaseInterval
+//     （准备切换出口，需要实时掌握备用节点状态；频率上限仍是 2 秒，
+//     不会比没有这个机制时更吵）
+//   - 备用节点：连续 l1HealthyStreak 次成功 → l1SlowInterval（20 秒）
+//   - 任一节点探测失败：立刻回到 l1BaseInterval，直到再次连续成功
+//   - 掉线节点的调度状态自动清理（不随重连泄漏）
+type l1Sched struct {
+	mu     sync.Mutex
+	next   map[string]time.Time // 每个出口的下次探测时刻
+	streak map[string]int       // 连续成功次数
+	// currentFailing 表示主节点最近一次探测失败（全员高频的触发器）。
+	currentFailing bool
+}
+
+func newL1Sched() *l1Sched {
+	return &l1Sched{
+		next:   make(map[string]time.Time),
+		streak: make(map[string]int),
+	}
+}
+
+// due 返回此刻该探测的出口列表，并顺带清理已掉线节点的调度状态。
+func (g *l1Sched) due(ids []string, now time.Time) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+		if g.currentFailing {
+			// 主节点出问题：全员高频，准备切换
+			out = append(out, id)
+			continue
+		}
+		next, ok := g.next[id]
+		if !ok || !now.Before(next) {
+			out = append(out, id)
+		}
+	}
+	for id := range g.next {
+		if !seen[id] {
+			delete(g.next, id)
+			delete(g.streak, id)
+		}
+	}
+	return out
+}
+
+// finish 记录一次探测结果并安排该出口的下次探测时刻。
+//
+// attempted=false 表示跳过（无可用通道），按失败节奏 2 秒后重试。
+func (g *l1Sched) finish(id string, attempted, ok, isCurrent bool, now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !attempted {
+		g.next[id] = now.Add(l1BaseInterval)
+		return
+	}
+	if !ok {
+		// 失败：该节点立刻回到高频，连续成功才降回去
+		g.streak[id] = 0
+		g.next[id] = now.Add(l1BaseInterval)
+		if isCurrent {
+			g.currentFailing = true
+		}
+		return
+	}
+	g.streak[id]++
+	if isCurrent {
+		g.currentFailing = false
+	}
+	iv := l1BaseInterval
+	if !isCurrent && g.streak[id] >= l1HealthyStreak {
+		iv = l1SlowInterval
+	}
+	g.next[id] = now.Add(iv)
+}
 
 // startProxyProbe 周期采样每个出口 agent 的 L1 链路质量并喂给选路器。
 //
@@ -54,6 +153,9 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 	// "fatal error: concurrent map writes" 崩过一次（2026-11-11 21:51）。
 	// 锁在结构体内部 ⇒ 这类错误从结构上不可能再犯。
 	win := newL1Windows()
+
+	// 自适应调度：正常备用节点降频到 20 秒，异常节点与主节点保持 2 秒。
+	sched := newL1Sched()
 
 	for {
 		select {
@@ -74,6 +176,19 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 			}
 			win.prune(alive)
 
+			// ★ 只探测「到点」的出口（自适应频率）✅
+			//
+			// 主节点与异常节点每 2 秒；健康备用节点每 20 秒。
+			// 主节点最近失败时全员 2 秒（准备切换）。
+			current := ""
+			if sel != nil {
+				current = sel.Current()
+			}
+			due := sched.due(ids, now)
+			if len(due) == 0 {
+				continue
+			}
+
 			// 各 agent **并行**探测。
 			//
 			// 之前是串行：一台超时就要等满一个超时，
@@ -86,13 +201,14 @@ func startProxyProbe(ctx context.Context, log *slog.Logger, gw *relay.Gateway, s
 			// （实测堆到过 4 万个）。4 个足够把 6 台 agent 的探测
 			// 压到两轮以内。
 			sem := make(chan struct{}, l1ProbeConcurrency)
-			for _, id := range ids {
+			for _, id := range due {
 				wg.Add(1)
 				go func(id string) {
 					defer wg.Done()
 					sem <- struct{}{}
 					defer func() { <-sem }()
-					probeL1Once(gw, sel, bw, log, id, now, win)
+					ok, attempted := probeL1Once(gw, sel, bw, log, id, now, win)
+					sched.finish(id, attempted, ok, id == current, now)
 				}(id)
 			}
 			wg.Wait()
@@ -301,6 +417,10 @@ func probeErrPhrase(err error) string {
 
 // probeL1Once 对单个 agent 做一次 L1 采样并记账。
 //
+// 返回 (ok, attempted)：
+//   - attempted=false：跳过（无可用通道），调度器按 2 秒节奏重试
+//   - attempted=true：真的探测了，ok 是结果 —— 调度器据此升降频
+//
 // # 「没有可用通道」不算链路丢包
 //
 // ErrNoUsableChannel 表示这台 agent 在线、但通道全被熔断了 ——
@@ -308,7 +428,7 @@ func probeErrPhrase(err error) string {
 // 形成级联（出口被踢 → DNS 失败 → 更多熔断）。
 // 所以这里直接跳过：不记丢包、不报告健康失败。
 func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
-	log *slog.Logger, id string, now time.Time, win *l1Windows) {
+	log *slog.Logger, id string, now time.Time, win *l1Windows) (bool, bool) {
 
 	rtt, err := gw.Ping(id, proxProbeTimeout)
 	ok := err == nil
@@ -318,7 +438,7 @@ func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
 		log.Debug("L1 跳过：出口无可用通道",
 			logx.FieldEvent, "probe.l1_skipped",
 			logx.FieldNodeID, shortID(id))
-		return
+		return false, false
 	}
 
 	// 采样窗口的读写在结构体内部加锁完成（并发安全）。
@@ -351,6 +471,7 @@ func probeL1Once(gw *relay.Gateway, sel *picker.Selector, bw *bwTracker,
 			logx.FieldNodeID, shortID(id),
 			logx.FieldErr, errStringSafe(err))
 	}
+	return ok, true
 }
 
 // l1Windows 记录每个 agent 的 L1 采样窗口（丢包率与最近一次成功的 RTT）。

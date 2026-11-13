@@ -301,6 +301,9 @@ func collectProxyStatus(
 			Open:    ci.Open,
 			Since:   ci.Since,
 			Streams: ci.Streams,
+			RTTMs:   ci.RTT,
+			Succ:    ci.Succ,
+			BWMbps:  ci.BW,
 		})
 	}
 	if pp.dns != nil {
@@ -337,6 +340,11 @@ func collectProxyStatus(
 				LinkReason:     c.LinkReason,
 				Eligible:       c.Eligible,
 				Note:           c.Note,
+				ScoreBW:        c.ScoreBW,
+				ScoreRTT:       c.ScoreRTT,
+				ScoreLoss:      c.ScoreLoss,
+				Affinity:       c.Affinity,
+				UptimeSeconds:  c.UptimeSeconds,
 			})
 		}
 		// 按评分降序：评分最高的排最前，也就是「当前最该用的那台」。

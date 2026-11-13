@@ -139,6 +139,11 @@ type ChannelSummary struct {
 	Since string `json:"since,omitempty"`
 	// Streams 是这条通道当前打开的 yamux 流数（开流卡住的前兆指标）。
 	Streams int `json:"streams"`
+	// RTTMs / Succ / BWMbps 是该通道的实时探测指标（EWMA）：
+	// 往返时延、成功率（0~1）、吞吐（Mbps）。无样本时为兜底值。
+	RTTMs  float64 `json:"rtt_ms"`
+	Succ   float64 `json:"succ"`
+	BWMbps float64 `json:"bw_mbps"`
 }
 
 // AgentDetail 是单台出口的实时指标。
@@ -167,6 +172,15 @@ type AgentDetail struct {
 	LinkReason   string `json:"link_reason,omitempty"`
 	Eligible     bool   `json:"eligible"` // 是否参与选路
 	Note         string `json:"note,omitempty"`
+	// 评分拆解：三个维度各自的加权贡献（之和 = 加亲和前的 Score）。
+	// 状态页用它解释「为什么只有 30-40 分」。
+	ScoreBW   float64 `json:"score_bw"`
+	ScoreRTT  float64 `json:"score_rtt"`
+	ScoreLoss float64 `json:"score_loss"`
+	// Affinity 是该出口是否对当前目标有 CDN 亲和加成（+15 分）。
+	Affinity bool `json:"affinity,omitempty"`
+	// UptimeSeconds 是该出口本次接入以来的秒数。
+	UptimeSeconds int64 `json:"uptime_seconds,omitempty"`
 }
 
 // PeerSummary 是对等节点概况。

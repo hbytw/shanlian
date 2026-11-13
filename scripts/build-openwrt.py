@@ -438,7 +438,7 @@ function slxRender(d){
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span>'+
 			'<span class="slx-msg">　按评分排序，第一行是当前最优</span></div>'+
 			'<table class="slx-tbl"><thead><tr>'+
-			'<th>位置</th><th>节点</th><th>评分</th><th>延迟</th><th>带宽</th><th>丢包</th><th>状态</th>'+
+			'<th>位置</th><th>节点</th><th>评分（拆解）</th><th>延迟</th><th>带宽</th><th>丢包</th><th>在线</th><th>状态</th>'+
 			'</tr></thead><tbody>';
 		a.details.forEach(function(x, idx){
 			var state='正常', cls='slx-ok';
@@ -458,15 +458,32 @@ function slxRender(d){
 			if(x.link_failures>0) tags+='<span class="slx-mini">链路失败 '+x.link_failures+'</span>';
 			if(x.link_reason && x.link_failures>0) sub+='<div class="slx-sub slx-msg">'+x.link_reason+'</div>';
 			var stateCell='<td class="'+cls+'">'+state+(tags?'<div>'+tags+'</div>':'')+sub+'</td>';
+			// 评分拆解：三维度贡献 + 亲和
+			var parts='<span class="slx-mini">带宽 '+(x.score_bw||0).toFixed(1)+'</span>'+
+			          '<span class="slx-mini">延迟 '+(x.score_rtt||0).toFixed(1)+'</span>'+
+			          '<span class="slx-mini">丢包 '+(x.score_loss||0).toFixed(1)+'</span>'+
+			          (x.affinity?'<span class="slx-mini">亲和+15</span>':'');
+			var scoreCell='<td><strong>'+x.score.toFixed(1)+'</strong><div>'+parts+'</div></td>';
+			var up='—';
+			if(x.uptime_seconds>0){
+				up = x.uptime_seconds>=86400 ? Math.floor(x.uptime_seconds/86400)+'天'
+				   : x.uptime_seconds>=3600 ? Math.floor(x.uptime_seconds/3600)+'时'
+				   : Math.floor(x.uptime_seconds/60)+'分';
+			}
 			var rowCls = (idx === 0) ? ' class="slx-best"' : '';
 			h += '<tr'+rowCls+'><td>'+loc+(idx===0?' <span class="slx-tag">当前</span>':'')+'</td>'+
 			     '<td class="slx-mono">'+x.id+'</td>'+
-			     '<td><strong>'+x.score.toFixed(1)+'</strong></td>'+
-			     '<td>'+rtt+'</td><td>'+bw+'</td><td>'+loss+'</td>'+
+			     scoreCell+
+			     '<td>'+rtt+'</td><td>'+bw+'</td><td>'+loss+'</td><td>'+up+'</td>'+
 			     stateCell+'</tr>';
 		});
 		ag.innerHTML = h + '</tbody></table>'+
-			'<div class="slx-msg" style="margin-top:8px">评分越高越优先；延迟/带宽/丢包为实时实测值。</div>';
+			'<div class="slx-msg" style="margin-top:8px;line-height:1.7">'+
+			'<b>评分公式</b>：总分 = 100×(0.45×带宽分 + 0.35×延迟分 + 0.20×丢包分)，域名亲和 +15，上限 100。<br>'+
+			'带宽分 = bw/(bw+50Mbps)（软上限 50M）；延迟分 = 100/(100+延迟ms)；丢包分 = 1−丢包率。<br>'+
+			'<b>为什么普遍 30-40 分</b>：丢包 0% 拿满 20 分；跨境延迟 100-600ms 只拿 9-18 分；'+
+			'带宽是被动统计（通常几 Mbps）只拿 1-4 分。分数看相对不看绝对 —— 选路只比谁高。<br>'+
+			'评分越高越优先；延迟/带宽/丢包为实时实测值。</div>';
 	}else{
 		var h='<span class="slx-ok">已接入 '+a.count+' 个</span>'+
 			'<span class="slx-msg">　监听 '+(a.listen||'—')+'</span><div style="margin-top:6px">';
@@ -536,6 +553,7 @@ function slxRender(d){
 		(a.details||[]).forEach(function(x){ if(x.label) lbl[x.id]=x.label; });
 		var h='<table class="slx-tbl"><thead><tr>'+
 			'<th>位置</th><th>出口</th><th>类型</th><th>对端</th><th>评分</th>'+
+			'<th>RTT</th><th>成功率</th><th>吞吐</th>'+
 			'<th>角色</th><th>状态</th><th>流数</th><th>在线</th>'+
 			'</tr></thead><tbody>';
 		chs.forEach(function(c){
@@ -546,14 +564,22 @@ function slxRender(d){
 			var role = c.primary?'<span class="slx-tag">主</span>':'备';
 			var st = c.open?'<span class="slx-bad">熔断</span>':'<span class="slx-ok">正常</span>';
 			var streams = (c.streams>50)?'<span class="slx-warn">'+c.streams+'</span>':(c.streams||0);
+			var rtt = (c.rtt_ms>0)?Math.round(c.rtt_ms)+' ms':'—';
+			// 成功率低标黄（<95%），吞吐正常显示
+			var sr = (c.succ!==undefined && c.succ>0)
+				? ((c.succ*100).toFixed(1)+'%'+(c.succ<0.95?' <span class="slx-warn">↓</span>':''))
+				:'—';
+			var bwv = (c.bw_mbps>0)?(c.bw_mbps.toFixed(1)+' M'):'—';
 			h+='<tr><td>'+loc+'</td><td class="slx-mono">'+short+'</td><td>'+kind+'</td>'+
 			   '<td class="slx-mono">'+(c.remote||'—')+'</td>'+
 			   '<td><strong>'+Number(c.score||0).toFixed(1)+'</strong></td>'+
+			   '<td>'+rtt+'</td><td>'+sr+'</td><td>'+bwv+'</td>'+
 			   '<td>'+role+'</td><td>'+st+'</td><td>'+streams+'</td>'+
 			   '<td>'+(c.since?slxAge((Date.now()-new Date(c.since).getTime())/1000):'—')+'</td></tr>';
 		});
 		cel.innerHTML=h+'</tbody></table>'+
-			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。流数持续偏高说明有开流卡住。</div>';
+			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。'+
+			'RTT/成功率/吞吐为该通道探测 EWMA（无样本时兜底 200ms / 50% / 5M）。流数持续偏高说明有开流卡住。</div>';
 	}
 
 	// —— DNS 卡 ——
