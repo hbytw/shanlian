@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -78,6 +80,24 @@ func TestReportConnectFailure_TargetUnreachableStillCountsAsHealthy(t *testing.T
 	d := pick.Pick(nil, "", []string{"egA"}, now)
 	if d.Egress != "egA" {
 		t.Fatalf("目标不可达不应影响选路，实际 %q（%s）", d.Egress, d.Reason)
+	}
+}
+
+// TestReportConnectFailure_DeadlineDoesNotTrip 覆盖 2026-11-13 12:11 现场：
+// 隧道拥塞导致 15 秒握手超时（i/o deadline reached）不该喂出口熔断 ——
+// 当时香港/日本同时被喂出「上次失败」留痕，而它们 L1 探测 100%、0% 丢包。
+func TestReportConnectFailure_DeadlineDoesNotTrip(t *testing.T) {
+	pick := picker.NewSelector(picker.DefaultWeights())
+	now := time.Now()
+
+	// 真实形态：Open 把 lastErr 拼进 Reason、经 cause 透传（errors.Is 可穿透）
+	for i := 0; i < 10; i++ {
+		reportConnectFailure(pick, nil, "egA",
+			fmt.Errorf("打开复用流失败: %w", os.ErrDeadlineExceeded), now)
+	}
+
+	if b := pick.BreakerOf("egA"); b != nil {
+		t.Fatal("拥塞超时不该创建熔断器")
 	}
 }
 

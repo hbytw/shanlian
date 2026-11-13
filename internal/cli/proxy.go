@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -208,9 +209,17 @@ func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string
 		errors.Is(err, relay.ErrStreamSemFull) ||
 		errors.Is(err, relay.ErrStreamOpenTimeout) ||
 		errors.Is(err, relay.ErrChannelSessionClosed) ||
-		errors.Is(err, relay.ErrSessionUnavailable) {
+		errors.Is(err, relay.ErrSessionUnavailable) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		// ★ 超时类（os/context DeadlineExceeded）单独说明 —— 2026-11-13 12:11 现场：
+		//   BT 大流把隧道 TCP 塞满 ⇒ 建连握手帧排在 bulk 后面 ⇒ 15 秒握不上手
+		//   ⇒ 「打开复用流失败: i/o deadline reached」被当成出口故障喂进熔断
+		//   ⇒ 香港/日本同时假熔断，而它们的 L1 探测 100% 成功、0% 丢包。
+		//   拥塞超时是隧道的负载问题，不是出口的健康问题；
+		//   出口真挂了由 L2 熔断与 L1 丢包（评分）负责兜底。
 		if log != nil {
-			log.Debug("通道层/本机过载失败（不计入出口熔断）",
+			log.Debug("通道层/本机过载/拥塞超时（不计入出口熔断）",
 				logx.FieldEvent, "relay.channel_level_fail",
 				logx.FieldNodeID, shortID(nodeID),
 				logx.FieldErr, errStringSafe(err))
@@ -579,7 +588,9 @@ func (c *proxyConnector) PingHost(dst net.IP) bool {
 			errors.Is(err, relay.ErrStreamSemFull) ||
 			errors.Is(err, relay.ErrStreamOpenTimeout) ||
 			errors.Is(err, relay.ErrChannelSessionClosed) ||
-			errors.Is(err, relay.ErrSessionUnavailable) {
+			errors.Is(err, relay.ErrSessionUnavailable) ||
+			errors.Is(err, os.ErrDeadlineExceeded) ||
+			errors.Is(err, context.DeadlineExceeded) {
 			c.picker.ReportTargetFailure(nodeID)
 			return false
 		}

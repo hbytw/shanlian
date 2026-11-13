@@ -575,9 +575,20 @@ type ConnectError struct {
 	// （往往也是唯一那台）出口判成坏了并熔断掉，
 	// 于是「访问失败 → 出口被排除 → 更多访问失败」形成死亡螺旋。
 	TargetUnreachable bool
+
+	// cause 是底层错误（可为 nil）。
+	//
+	// 为什么必须保留错误链：Reason 是**拼接出来的字符串**，
+	// errors.Is 穿不透 —— 2026-11-13 现场踩过：15 秒握手超时
+	// （i/o deadline reached）被拼进 Reason 后，下游的哨兵判断
+	// 全部失明，超时被当成「出口自己坏了」喂进熔断（香港反复假熔断）。
+	cause error
 }
 
 func (e *ConnectError) Error() string { return e.Reason }
+
+// Unwrap 让 errors.Is/As 能穿透到 cause（拥塞超时、通道层哨兵等）。
+func (e *ConnectError) Unwrap() error { return e.cause }
 
 // ErrNoAgent 表示目标出口当前没有在线 agent。
 var ErrNoAgent = errors.New("relay: 目标出口没有在线 agent")
@@ -682,7 +693,9 @@ func (g *Gateway) Open(nodeID string, req proto.ConnectReq) (net.Conn, error) {
 	if lastErr == nil {
 		return nil, ErrNoUsableChannel
 	}
-	return nil, &ConnectError{Reset: true, Reason: "打开复用流失败: " + lastErr.Error()}
+	// cause 保留错误链：下游要能 errors.Is 判断超时/通道层哨兵
+	//（Reason 是拼接字符串，判断只能靠 cause）。
+	return nil, &ConnectError{Reset: true, Reason: "打开复用流失败: " + lastErr.Error(), cause: lastErr}
 }
 
 // shortID 截短 node_id 便于日志阅读。
