@@ -479,17 +479,30 @@ write("/usr/lib/lua/luci/view/slx/status.htm", r"""<%+header%>
 <div class="slx-card"><h3>DNS 转发</h3><div id="s-dns" class="slx-msg">读取中…</div></div>
 
 <div class="slx-card">
-	<h3>数据面</h3>
-	<div class="slx-kv">
-		<div><div class="k">TUN 收 / 发</div><div class="v" id="s-tun">—</div></div>
+	<h3>流量 · 错误</h3>
+	<div class="slx-sub" style="margin-bottom:8px">实时 = 最近一次刷新的增量速率（约 3 秒粒度）；合计与错误 = 自服务启动以来累计。</div>
+	<div class="slx-kv" style="margin-bottom:10px">
+		<div><div class="k">实时 TCP 吞吐</div><div class="v" id="r-tcp">—</div></div>
+		<div><div class="k">实时 UDP 吞吐</div><div class="v" id="r-udp">—</div></div>
+		<div><div class="k">实时 TUN 收包 / 发包</div><div class="v" id="r-tun">—</div></div>
+	</div>
+	<div class="slx-kv" style="margin-bottom:10px">
 		<div><div class="k">TCP 成功 / 失败</div><div class="v" id="s-tcp">—</div></div>
 		<div><div class="k">失败细分（连不上/栈/超限）</div><div class="v" id="s-tcpfail">—</div></div>
 		<div><div class="k">在途 TCP 连接</div><div class="v" id="s-tcpactive">—</div></div>
-		<div><div class="k">TCP / UDP 中继流量</div><div class="v" id="s-bytes">—</div></div>
 		<div><div class="k">UDP 成功 / 失败</div><div class="v" id="s-udp">—</div></div>
 		<div><div class="k">ICMP 回复 / 丢弃</div><div class="v" id="s-icmp">—</div></div>
+		<div><div class="k">TUN 收 / 发（包）</div><div class="v" id="s-tun">—</div></div>
+	</div>
+	<div class="slx-kv">
+		<div><div class="k">合计流量 TCP / UDP</div><div class="v" id="s-bytes">—</div></div>
+		<div><div class="k">流量总计</div><div class="v" id="s-bytestotal">—</div></div>
+		<div><div class="k">错误总计</div><div class="v" id="s-errtotal">—</div></div>
+		<div style="min-width:340px"><div class="k">错误明细</div><div class="v" id="s-errdetail" style="font-size:12px;font-weight:400;line-height:1.6">—</div></div>
 	</div>
 </div>
+
+<div class="slx-card"><h3>运行环境</h3><div id="s-env" class="slx-msg">读取中…</div></div>
 
 <div class="slx-card"><h3>结论</h3><div id="s-find" class="slx-msg">读取中…</div></div>
 </div>
@@ -503,6 +516,8 @@ function slxAge(sec){
 	if(h>0)return h+' 小时 '+m+' 分';
 	return m+' 分钟';
 }
+// 实时速率的跨次采样状态（字节累计值 + 上次采样时刻）
+var _slxRate={t:0,tcp:0,udp:0,tr:0,tw:0,tcpNow:'',udpNow:'',tunNow:''};
 function slxSet(id,txt,cls){
 	var el=document.getElementById(id); if(!el)return;
 	el.textContent=txt; el.className='v'+(cls?' '+cls:'');
@@ -520,6 +535,32 @@ function slxRender(d){
 		var cls = age<30?'slx-ok':(age<120?'slx-warn':'slx-bad');
 		slxSet('s-fresh', age<60?(age+' 秒前'):(Math.round(age/60)+' 分钟前'), cls);
 	}else{ slxSet('s-fresh','—'); }
+
+	// —— 实时速率：用相邻两次快照的字节差 ÷ 时间差（页面 3 秒拉一次）——
+	var a=d.agents||{};
+	if(a.tcp_bytes!==undefined){
+		var now=Date.now();
+		if(_slxRate.t){
+			var dt=(now-_slxRate.t)/1000;
+			if(dt>=2){   // 至少隔 2 秒才算，避免快照未更新时算出 0
+				var dT=(a.tcp_bytes||0)-_slxRate.tcp; if(dT<0)dT=0;
+				var dU=(a.udp_bytes||0)-_slxRate.udp; if(dU<0)dU=0;
+				var dR=(a.tun_read||0)-_slxRate.tr;   if(dR<0)dR=0;
+				var dW=(a.tun_write||0)-_slxRate.tw;  if(dW<0)dW=0;
+				_slxRate.tcpNow=(dT*8/dt/1e6).toFixed(2)+' Mbps';
+				_slxRate.udpNow=(dU*8/dt/1e6).toFixed(2)+' Mbps';
+				_slxRate.tunNow=Math.round(dR/dt)+' / '+Math.round(dW/dt)+' 包/秒';
+				_slxRate.t=now; _slxRate.tcp=a.tcp_bytes||0; _slxRate.udp=a.udp_bytes||0;
+				_slxRate.tr=a.tun_read||0; _slxRate.tw=a.tun_write||0;
+			}
+		}else{
+			_slxRate.t=now; _slxRate.tcp=a.tcp_bytes||0; _slxRate.udp=a.udp_bytes||0;
+			_slxRate.tr=a.tun_read||0; _slxRate.tw=a.tun_write||0;
+		}
+		slxSet('r-tcp', _slxRate.tcpNow||'采样中…');
+		slxSet('r-udp', _slxRate.udpNow||'采样中…');
+		slxSet('r-tun', _slxRate.tunNow||'采样中…');
+	}
 
 	var a=d.agents||{}, ag=document.getElementById('s-agents');
 	if(!run){ ag.innerHTML='<span class="slx-msg">服务未运行</span>'; }
@@ -587,9 +628,38 @@ function slxRender(d){
 		if(n>=1024) return (n/1024).toFixed(0)+' KB';
 		return n+' B';
 	}
-	slxSet('s-bytes', slxFmtBytes(a.tcp_bytes)+' / '+slxFmtBytes(a.udp_bytes));
+	var tcpB=a.tcp_bytes||0, udpB=a.udp_bytes||0;
+	slxSet('s-bytes', slxFmtBytes(tcpB)+' / '+slxFmtBytes(udpB));
+	slxSet('s-bytestotal', slxFmtBytes(tcpB+udpB));
 	slxSet('s-udp',(a.udp_accepted||0)+' / '+(a.udp_failed||0));
 	slxSet('s-icmp',(a.icmp_replied||0)+' / '+(a.icmp_dropped||0));
+
+	// —— 错误汇总：所有可计数的错误加一个总数，明细一行列出 ——
+	var dnsF=(d.dns&&d.dns.failures)||0;
+	var linkF=0; (a.details||[]).forEach(function(x){linkF+=(x.link_failures||0);});
+	var chBreak=0; (d.channels||[]).forEach(function(c){ if(c.open) chBreak++; });
+	var errTotal=(a.tcp_failed||0)+(a.udp_failed||0)+dnsF+linkF+chBreak;
+	slxSet('s-errtotal', String(errTotal), errTotal>0?'slx-warn':'slx-ok');
+	slxSet('s-errdetail',
+		'TCP 失败 '+((a.tcp_failed||0))+
+		'（连不上 '+(a.tcp_fail_connect||0)+' / 协议栈 '+(a.tcp_fail_endpoint||0)+' / 超限 '+(a.tcp_fail_limit||0)+'）'+
+		'　UDP 失败 '+(a.udp_failed||0)+
+		'　DNS 失败 '+dnsF+
+		'　链路失败 '+linkF+
+		'　通道熔断 '+chBreak);
+
+	// —— 运行环境 ——
+	var ev=d.env||{}, eel=document.getElementById('s-env');
+	if(eel){
+		eel.innerHTML='<div class="slx-kv">'+
+			'<div><div class="k">默认路由接口</div><div class="v">'+(ev.default_iface||'—')+'</div></div>'+
+			'<div><div class="k">LAN 接口</div><div class="v">'+(ev.lan_iface||'—')+'</div></div>'+
+			'<div><div class="k">ZeroTier 接口</div><div class="v">'+((ev.zt_ifaces&&ev.zt_ifaces.length)?ev.zt_ifaces.join(', '):'无')+'</div></div>'+
+			'<div><div class="k">防火墙后端</div><div class="v">'+(ev.firewall||'—')+'</div></div>'+
+			'<div><div class="k">ipset 分流</div><div class="v '+(ev.has_ipset?'slx-ok':'slx-bad')+'">'+(ev.has_ipset?'可用':'缺失')+'</div></div>'+
+			'<div><div class="k">TUN 设备</div><div class="v '+(ev.has_tun?'slx-ok':'slx-bad')+'">'+(ev.has_tun?'已创建':'未创建')+'</div></div>'+
+			'</div>';
+	}
 
 	// —— 通道卡 ——
 	var chs=d.channels||[], cel=document.getElementById('s-channels');
