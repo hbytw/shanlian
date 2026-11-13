@@ -848,11 +848,28 @@ func (g *Gateway) dialAgent(ctx context.Context, nodeID string, info *dialInfo) 
 
 // —— 通道探测 ——
 
-// errChannelSessionClosed 表示这条通道的底层会话已经关闭。
+// ErrChannelSessionClosed 表示这条通道的底层会话已经关闭。
 //
 // 这不是「探测失败」，而是「这条通道已经死了」——
 // 应当直接把它摘掉重建，而不是走熔断流程反复冷却。
-var errChannelSessionClosed = errors.New("relay: 通道会话已关闭")
+// 这是**通道层**问题，cli 侧据此不推进 agent 级熔断。
+var ErrChannelSessionClosed = errors.New("relay: 通道会话已关闭")
+
+// 以下是「本机过载 / 通道层」失败的哨兵错误。
+//
+// ★ 它们都不该推进出口级熔断（2026-11-13 伟哥问「为什么当前还是失败的」）：
+//
+//	在途开流打满 ⇒ 本机保护性拒绝，出口是无辜的
+//	开流超时     ⇒ 隧道拥塞（BT 大流量把通道 TCP 塞满），出口探测明明 100% 成功
+//	会话已关闭   ⇒ 通道级问题，由通道熔断与自动重建负责
+//
+// 混进熔断计数的后果：**谁承载的流量大，谁就先被熔断** ——
+// 惩罚优等生，而且 BT 高负载时会连环触发（与死亡螺旋同构）。
+var (
+	ErrStreamSemFull      = errors.New("relay: 在途开流已达上限")
+	ErrStreamOpenTimeout  = errors.New("relay: 打开复用流超时")
+	ErrSessionUnavailable = errors.New("relay: 会话为空")
+)
 
 // probeOnChannel 在某条通道上做一次 ping 往返。
 //
@@ -869,7 +886,7 @@ var errChannelSessionClosed = errors.New("relay: 通道会话已关闭")
 func (g *Gateway) probeOnChannel(c *channel, timeout time.Duration) (time.Duration, error) {
 	// 会话已经死了 → 立刻失败，不浪费一个探测周期。
 	if c.sess == nil || c.sess.IsClosed() {
-		return 0, errChannelSessionClosed
+		return 0, ErrChannelSessionClosed
 	}
 
 	c.probeMu.Lock()
@@ -1115,14 +1132,14 @@ var openStreamSem = make(chan struct{}, 128)
 //     不在对端留下永远不关的流条目。
 func openStreamWithTimeout(sess *yamux.Session, timeout time.Duration) (*yamux.Stream, error) {
 	if sess == nil {
-		return nil, errors.New("relay: 会话为空")
+		return nil, ErrSessionUnavailable
 	}
 	// 在途开流数超限 ⇒ 快速失败（不排队）。
 	// 在途开流数超限 ⇒ 快速失败（不排队）。
 	select {
 	case openStreamSem <- struct{}{}:
 	default:
-		return nil, fmt.Errorf("relay: 在途开流已达上限（%d），拒绝新开流", cap(openStreamSem))
+		return nil, fmt.Errorf("%w（%d），拒绝新开流", ErrStreamSemFull, cap(openStreamSem))
 	}
 	type res struct {
 		conn *yamux.Stream
@@ -1149,7 +1166,7 @@ func openStreamWithTimeout(sess *yamux.Session, timeout time.Duration) (*yamux.S
 				_ = r.conn.Close()
 			}
 		}()
-		return nil, fmt.Errorf("relay: 打开复用流超时（%s）", timeout)
+		return nil, fmt.Errorf("%w（%s）", ErrStreamOpenTimeout, timeout)
 	}
 }
 
@@ -1280,7 +1297,7 @@ const DefaultProbeTimeout = 10 * time.Second
 // 所以这里给 L1 单独一条流。
 func (g *Gateway) probeL1(c *channel, timeout time.Duration) (time.Duration, error) {
 	if c.sess == nil || c.sess.IsClosed() {
-		return 0, errChannelSessionClosed
+		return 0, ErrChannelSessionClosed
 	}
 
 	c.l1Mu.Lock()

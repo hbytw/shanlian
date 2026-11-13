@@ -76,9 +76,10 @@ func (s *Selector) SnapshotState(candidates []string, now time.Time) Snapshot {
 				st.Note = "冷却结束，正在试探"
 			}
 		} else if view.reason != "" {
-			// 没熔断，但最近一次探测失败过：写进备注，
-			// 让出口表能看出「这台上次没连上公网」。
-			st.Note = "上次探测失败：" + view.reason
+			// 没熔断，但最近一次失败过：写进备注。
+			// 前缀用「上次失败」而非「上次探测失败」—— 这个原因可能来自
+			// 业务建连，不一定是探测（2026-11-13 伟哥被「当前还是失败的」误导过）。
+			st.Note = "上次失败：" + view.reason
 		}
 		snap.Candidates = append(snap.Candidates, st)
 	}

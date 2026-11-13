@@ -581,11 +581,15 @@ function slxRender(d){
 			if(curIdx<0 && x.eligible!==false && x.breaker!=='熔断') curIdx=idx;
 		});
 		a.details.forEach(function(x, idx){
-			var state='正常', cls='slx-ok';
-			if(x.breaker === '熔断'){ state='熔断'; cls='slx-bad'; }
-			else if(x.breaker === '试探'){ state='试探'; cls='slx-warn'; }
+			var state='正常', cls='slx-ok', noteSub='';
+			if(x.breaker === '熔断'){ state='熔断'; cls='slx-bad'; if(x.note) noteSub='<div class="slx-sub slx-msg">'+x.note+'</div>'; }
+			else if(x.breaker === '试探'){ state='试探'; cls='slx-warn'; if(x.note) noteSub='<div class="slx-sub slx-msg">'+x.note+'</div>'; }
 			else if(x.eligible === false){ state='不参与'; cls='slx-msg'; }
-			else if(x.note){ state=x.note; cls='slx-msg'; }
+			else if(x.note){
+				// 正常出口的失败留痕：不顶替「正常」，降为下方灰色小字 ——
+				// 顶替会让全绿的出口看着像还在失败（2026-11-13 伟哥困惑过）
+				noteSub='<div class="slx-sub slx-msg">'+x.note+'</div>';
+			}
 			var rtt = x.rtt_ms > 0 ? Math.round(x.rtt_ms)+' ms' : '—';
 			var bw  = x.bw_mbps > 0 ? x.bw_mbps.toFixed(1)+' M' : '—';
 			var loss= (x.loss > 0) ? (x.loss*100).toFixed(1)+'%' : '0%';
@@ -597,7 +601,7 @@ function slxRender(d){
 			if(x.target_failures>0) tags+='<span class="slx-mini">目标打不开 '+x.target_failures+'</span>';
 			if(x.link_failures>0) tags+='<span class="slx-mini">链路失败 '+x.link_failures+'</span>';
 			if(x.link_reason && x.link_failures>0) sub+='<div class="slx-sub slx-msg">'+x.link_reason+'</div>';
-			var stateCell='<td class="'+cls+'">'+state+(tags?'<div>'+tags+'</div>':'')+sub+'</td>';
+			var stateCell='<td class="'+cls+'">'+state+(tags?'<div>'+tags+'</div>':'')+noteSub+sub+'</td>';
 			// 评分拆解：三维度贡献 + 亲和
 			var parts='<span class="slx-mini">带宽 '+(x.score_bw||0).toFixed(1)+'</span>'+
 			          '<span class="slx-mini">延迟 '+(x.score_rtt||0).toFixed(1)+'</span>'+

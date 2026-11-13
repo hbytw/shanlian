@@ -197,17 +197,36 @@ func reportConnectFailure(pick *picker.Selector, log *slog.Logger, nodeID string
 	// 越级把 agent 级熔断也拖下水 ⇒ 一条坏通道拖死整台出口，
 	// DNS 之类的旁路跟着一起断（现场事故：出口集体熔断 + DNS 失败 523 次）。
 	//
-	// 这里只记录，不推进 agent 级熔断计数。
-	if errors.Is(err, relay.ErrNoUsableChannel) {
+	// 同理，**本机过载与通道层失败**也不推进出口熔断（2026-11-13）：
+	//   在途开流打满 ⇒ 本机保护性拒绝，出口无辜
+	//   开流超时     ⇒ 隧道拥塞（BT 大流量），出口探测 100% 成功着呢
+	//   会话已关闭/为空 ⇒ 通道级，有通道熔断与自动重建负责
+	// 混进去的后果是「谁流量大谁先熔断」—— 惩罚优等生，还连环触发。
+	//
+	// 这些只记录，不推进 agent 级熔断计数。
+	if errors.Is(err, relay.ErrNoUsableChannel) ||
+		errors.Is(err, relay.ErrStreamSemFull) ||
+		errors.Is(err, relay.ErrStreamOpenTimeout) ||
+		errors.Is(err, relay.ErrChannelSessionClosed) ||
+		errors.Is(err, relay.ErrSessionUnavailable) {
 		if log != nil {
-			log.Debug("该出口没有可用通道（不计入出口熔断）",
-				logx.FieldEvent, "relay.no_usable_channel",
-				logx.FieldNodeID, shortID(nodeID))
+			log.Debug("通道层/本机过载失败（不计入出口熔断）",
+				logx.FieldEvent, "relay.channel_level_fail",
+				logx.FieldNodeID, shortID(nodeID),
+				logx.FieldErr, errStringSafe(err))
 		}
 		return
 	}
+	// 真正喂熔断的失败必须留痕：这是「出口自己坏了」的判定，
+	// 带上原始错误 —— 上次排查时日志里完全没有这条，只能靠猜。
+	if log != nil {
+		log.Warn("业务建连失败，计入出口熔断",
+			logx.FieldEvent, "relay.health_fail",
+			logx.FieldNodeID, shortID(nodeID),
+			logx.FieldErr, errStringSafe(err))
+	}
 	// 短语是通用的「失败」时不再拼冒号 —— 否则状态页会显示成
-	// 「上次探测失败：出口链路失败：失败」（失败：失败，读着像卡壳）。
+	// 「上次失败：出口链路失败：失败」（失败：失败，读着像卡壳）。
 	phrase := probeErrPhrase(err)
 	reason := "出口链路失败"
 	if phrase != "失败" {
@@ -554,14 +573,29 @@ func (c *proxyConnector) PingHost(dst net.IP) bool {
 	}
 	alive, err := c.gw.PingHost(nodeID, dst, icmpPingTimeout)
 	if err != nil {
-		// 「没有可用通道」是通道级熔断的结果，不是出口本身坏了 ⇒ 不推进 agent 级熔断。
-		if errors.Is(err, relay.ErrNoUsableChannel) {
+		// 「没有可用通道」「本机过载」「通道层失败」都不是出口本身坏了
+		// ⇒ 不推进 agent 级熔断（与 reportConnectFailure 同一套分类）。
+		if errors.Is(err, relay.ErrNoUsableChannel) ||
+			errors.Is(err, relay.ErrStreamSemFull) ||
+			errors.Is(err, relay.ErrStreamOpenTimeout) ||
+			errors.Is(err, relay.ErrChannelSessionClosed) ||
+			errors.Is(err, relay.ErrSessionUnavailable) {
 			c.picker.ReportTargetFailure(nodeID)
 			return false
 		}
 		// relay 层失败：agent 会话断了或开不了流 → 出口自己坏了，计入熔断。
-		c.picker.ReportHealthWithReason(nodeID, false,
-			"出口链路失败："+probeErrPhrase(err), time.Now())
+		if c.log != nil {
+			c.log.Warn("探测建连失败，计入出口熔断",
+				logx.FieldEvent, "relay.health_fail",
+				logx.FieldNodeID, shortID(nodeID),
+				logx.FieldErr, errStringSafe(err))
+		}
+		phrase := probeErrPhrase(err)
+		reason := "出口链路失败"
+		if phrase != "失败" {
+			reason += "：" + phrase
+		}
+		c.picker.ReportHealthWithReason(nodeID, false, reason, time.Now())
 		return false
 	}
 	if !alive {
