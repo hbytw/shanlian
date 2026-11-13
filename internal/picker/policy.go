@@ -28,6 +28,11 @@ const (
 	breakerCooldownBase = 60 * time.Second
 	// breakerCooldownMax 是冷却时间的上限（指数退避封顶）。
 	breakerCooldownMax = 10 * time.Minute
+
+	// failureNoteTTL 是状态页「上次失败」留痕的展示窗口：
+	// 只显示最近 30 分钟内的失败原因，更早的只留在日志里。
+	// reason 本身仍永久保留（排障要用），过期只发生在**展示路径**。
+	failureNoteTTL = 30 * time.Minute
 )
 
 // MinEgressUptime 是出口的「最小存活时长」。
@@ -69,7 +74,14 @@ type Breaker struct {
 	// 成功时**不**清空：L1 探测每 2 秒成功一次，清空的话
 	// L2 探测记录的原因会被立刻抹掉，状态页就永远看不到
 	// 「这个出口连不上 1.1.1.1」这类真正有用的信息。
+	//
+	// ★ 展示层另有过期（failureNoteTTL，见 FreshReason）：
+	//   reason 永久保留供排障，但状态页只显示最近 30 分钟内的 ——
+	//   否则一次历史失败会在全绿的出口上挂一整天
+	//   （2026-11-13 伟哥：「为什么香港还显示失败」）。
 	reason string
+	// lastFail 是最近一次失败的时刻（展示过期用；零值 = 从未失败）。
+	lastFail time.Time
 	// threshold 是熔断所需的连续失败次数。
 	threshold int
 }
@@ -175,6 +187,7 @@ func (b *Breaker) RecordWithReason(success bool, reason string, now time.Time) {
 	if reason != "" {
 		b.reason = reason
 	}
+	b.lastFail = now
 	switch b.state {
 	case breakerHalfOpen:
 		// 试探失败：立刻重新熔断，冷却时间翻倍
@@ -190,6 +203,23 @@ func (b *Breaker) RecordWithReason(success bool, reason string, now time.Time) {
 func (b *Breaker) Reason() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.reason
+}
+
+// FreshReason 返回「仍在展示窗口内」的失败原因。
+//
+// 与 Reason() 的区别只在过期：超过 failureNoteTTL 的历史失败不再展示
+// （但 reason 数据保留，Reason() 照旧可读）。状态页的留痕走这个 ——
+// 一次 30 分钟前的失败不该让全绿的出口「看起来还是坏的」。
+func (b *Breaker) FreshReason(now time.Time) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.reason == "" || b.lastFail.IsZero() {
+		return ""
+	}
+	if now.Sub(b.lastFail) > failureNoteTTL {
+		return ""
+	}
 	return b.reason
 }
 

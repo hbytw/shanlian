@@ -888,11 +888,13 @@ func (s *Selector) breakerViewLocked(egressID string, now time.Time) breakerView
 	v.reason = strings.Join(reasons, "；")
 	if v.reason == "" {
 		// 都没熔断，但可能最近失败过：取一条原因出来做备注。
+		// ★ 走 FreshReason（30 分钟过期）—— 历史失败不该让
+		//   全绿的出口在状态页上「看起来还是坏的」。
 		for _, b := range []*Breaker{s.l2Breakers[egressID], s.breakers[egressID]} {
 			if b == nil {
 				continue
 			}
-			if r := b.Reason(); r != "" {
+			if r := b.FreshReason(now); r != "" {
 				v.reason = r
 				break
 			}
