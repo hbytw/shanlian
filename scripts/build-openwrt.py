@@ -112,6 +112,12 @@ ensure_key() {
 }
 
 start_service() {
+	# SLX_DISABLED_CHECK: enabled=0 时不启动。
+	# 只靠 rc.d 符号链接拦不住 —— LuCI 设置页保存会直接 restart 本脚本，
+	# 2026-11-13 伟哥「关了开关进程还在跑」的根因就是这里缺检查。
+	if [ "$(slx_get enabled)" != "1" ]; then
+		return 0
+	fi
 	ensure_key
 	gen_yaml
 
@@ -135,6 +141,63 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
+
+	# 重新启用时接回 DNS 链路（关闭时 stop_service 会撤掉 5335）：
+	# 否则境外域名解析不走出口 —— 只在网关角色做（agent 角色不跑 DNS 转发）
+	local dl dport
+	dl="$(slx_get dns_listen)"
+	if [ -z "$ga" ] && [ -n "$dl" ]; then
+		dport="${dl##*:}"
+		if ! uci -q get dhcp.@dnsmasq[0].server | grep -q "#${dport}"; then
+			uci add_list dhcp.@dnsmasq[0].server="127.0.0.1#${dport}"
+			uci commit dhcp
+			/etc/init.d/dnsmasq restart >/dev/null 2>&1
+		fi
+	fi
+}
+
+# stop_service: 进程由 procd 发 TERM（进程自己撤规则），这里做**收尾兜底**。
+#
+# 2026-11-13 伟哥的四项要求：开关关闭后
+#   1) 进程全部停止 —— procd 负责；enabled 检查防被拉起
+#   2) 代理停止    —— 进程退出即停（含 TUN）
+#   3) 分流停止    —— 进程正常退出自撤；**强杀/崩溃会残留**，这里幂等清一遍
+#   4) 状态页显示停止 —— 删残留快照 + action_status 的 pidof 检查双保险
+# 附带：DNS 链路还原（5335 即将无人监听，dnsmasq 不能还指着它）
+stop_service() {
+	# —— 3) 分流兜底清理（幂等，重复执行无害）——
+	local chain r
+	for chain in PREROUTING OUTPUT; do
+		iptables -t mangle -S $chain 2>/dev/null | grep 'slx:' | while read -r r; do
+			eval iptables -t mangle $(echo "$r" | sed 's/^-A/-D/') 2>/dev/null
+		done
+		ip6tables -t mangle -S $chain 2>/dev/null | grep 'slx:' | while read -r r; do
+			eval ip6tables -t mangle $(echo "$r" | sed 's/^-A/-D/') 2>/dev/null
+		done
+	done
+	ip rule del fwmark 0x100 lookup 100 2>/dev/null
+	ip route flush table 100 2>/dev/null
+	ipset destroy slx_cn 2>/dev/null
+	ipset destroy slx_exempt 2>/dev/null
+
+	# —— 4) 状态页立刻显示未运行：删残留快照 ——
+	rm -f /tmp/slx-status.json
+
+	# —— DNS 还原：撤掉指向本机 5335 的上游，缺公共上游时补上 ——
+	local dl dport
+	dl="$(slx_get dns_listen)"
+	if [ -n "$dl" ]; then
+		dport="${dl##*:}"
+		if uci -q get dhcp.@dnsmasq[0].server | grep -q "#${dport}"; then
+			uci del_list dhcp.@dnsmasq[0].server="127.0.0.1#${dport}"
+			if [ -z "$(uci -q get dhcp.@dnsmasq[0].server)" ]; then
+				uci add_list dhcp.@dnsmasq[0].server='223.5.5.5#53'
+				uci add_list dhcp.@dnsmasq[0].server='119.29.29.29#53'
+			fi
+			uci commit dhcp
+			/etc/init.d/dnsmasq restart >/dev/null 2>&1
+		fi
+	fi
 }
 
 service_triggers() {
@@ -209,6 +272,23 @@ end
 function action_status()
 	local fs = require "nixio.fs"
 	local http = require "luci.http"
+
+	-- ★ 进程不在 = 立即报未运行（2026-11-13 伟哥要求：关闭开关后
+	--   状态页必须显示停止）。快照文件是残留的，进程死了它还在，
+	--   只信文件会永远显示「运行中」—— pidof 是主保险，
+	--   stop_service 删快照是干净收尾，两层防漏。
+	local pidf = io.popen("pidof slx 2>/dev/null")
+	local pidout = ""
+	if pidf then
+		pidout = pidf:read("*a") or ""
+		pidf:close()
+	end
+	if not pidout:match("%S") then
+		http.prepare_content("application/json")
+		http.write('{"running":false}')
+		return
+	end
+
 	local raw = fs.readfile("/tmp/slx-status.json")
 	http.prepare_content("application/json")
 	if not raw then
