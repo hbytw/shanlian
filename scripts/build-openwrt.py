@@ -519,7 +519,7 @@ function slxRender(d){
 			'<code>slx agent --gateway &lt;本机IP:11601&gt;</code></div>';
 	}else if(a.details && a.details.length){
 		// 出口的「流量」列 = 该出口所有通道的**实时上/下行速率**聚合
-		//（业务连接字节 → 10 秒结算的 EWMA）。
+		//（业务连接字节 → 15 秒结算的 EWMA）。
 		// 伟哥 2026-11-13：「显示实时上下行流量」——按实时流量算，不跑测速。
 		var upAgg = {}, dnAgg = {};
 		(d.channels||[]).forEach(function(c){
@@ -687,7 +687,7 @@ function slxRender(d){
 		});
 		cel.innerHTML=h+'</tbody></table>'+
 			'<div class="slx-msg" style="margin-top:8px">直连=公网 TCP 直连通道；兜底=ZeroTier 隧道。'+
-			'RTT/成功率为探测 EWMA（无样本兜底 200ms / 50%）；流量=实时 ↑上行 ↓下行（10 秒结算，「—」表示近期无流量）。'+
+			'RTT/成功率为探测 EWMA（无样本兜底 200ms / 50%）；流量=实时 ↑上行 ↓下行（15 秒结算，「—」表示近期无流量）。'+
 			'流数持续偏高说明有开流卡住。</div>';
 	}
 

@@ -76,10 +76,12 @@ const maxInFlight = 1024
 //	  yamux 在途流位、出口连接数一起打满
 //	⇒ 后面来的正常流量被挤掉，表现为「越忙越慢、最后全超时」
 //
-// 为什么是 512 ：
-//   - 家用场景正常浏览也就几十条并发
-//   - 512 远低于「把路由器内存打爆」的数量级
-const defaultMaxActiveTCP = 512
+// 为什么是 1024（2026-11-13 从 512 上调）：
+//   - 晚高峰现场 20 分钟 3405 次「超限」被拒 —— 失败引发客户端重试、
+//     重试堆积又顶满上限，正反馈把断续放大（tcp_fail_limit 占失败 27%）
+//   - 1024 与握手层 maxInFlight 对齐：握手能过、中继却拒，是自相矛盾
+//   - 内存仍安全：每条中继 ≈ 几十 KB，1024 条 ≈ 数十 MB
+const defaultMaxActiveTCP = 1024
 
 // Connector 由网关侧实现：把「去往 dst:port 的连接」落到某个出口 agent。
 type Connector interface {

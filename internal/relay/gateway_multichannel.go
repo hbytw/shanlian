@@ -298,7 +298,7 @@ type channel struct {
 	// 方向按网关视角：up = 客户端→出口（上传），down = 出口→客户端（下载）。
 	upBytes   int64
 	downBytes int64
-	// bwUp/bwDown 是上下行的实时速率 EWMA（10 秒结算）。
+	// bwUp/bwDown 是上下行的实时速率 EWMA（15 秒结算）。
 	bwUp    *ewma
 	bwDown  *ewma
 	bytesAt time.Time
@@ -428,12 +428,17 @@ func (c *channel) score(now time.Time) float64 {
 //
 // ★ 结算时机：ChannelInfos()（状态快照每 5 秒来一次）+ 探测周期 ——
 //
-//	借快照周期当结算节拍，页面拉到的数据 ≤10 秒新鲜，无需单独 ticker。
+//	借快照周期当结算节拍，页面拉到的数据 ≤15 秒新鲜，无需单独 ticker。
+//
+// ★ 窗口 15 秒（2026-11-13 从 10 秒上调）：视频是脉冲式拉流
+//
+//	（缓冲 5-10M、停顿 ~0），10 秒窗口截到停顿期显示 0.1 被判「不准确」；
+//	15 秒更接近体感速度，代价是新鲜度降 5 秒。
 func (c *channel) settleBW(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	elapsed := now.Sub(c.bytesAt).Seconds()
-	if elapsed < 10 {
+	if elapsed < 15 {
 		return
 	}
 	mbps := float64(c.bytes*8) / 1000 / 1000 / elapsed
@@ -1117,10 +1122,10 @@ type ChannelInfo struct {
 	RTT float64 `json:"rtt_ms"`
 	// Succ 是该通道探测成功率（0~1，EWMA；无样本时兜底 0.5）。
 	Succ float64 `json:"succ"`
-	// BW 是该通道的实时吞吐（Mbps，10 秒结算的 EWMA；**无样本为 0**）。
+	// BW 是该通道的实时吞吐（Mbps，15 秒结算的 EWMA；**无样本为 0**）。
 	// 0 = 近期没跑过流量，页面显示「——」——不拿兜底值冒充实测。
 	BW float64 `json:"bw_mbps"`
-	// BWUp/BWDown 是上行/下行的实时速率（Mbps，同样 10 秒结算、无样本 0）。
+	// BWUp/BWDown 是上行/下行的实时速率（Mbps，同样 15 秒结算、无样本 0）。
 	// 方向按网关视角：up=客户端→出口（上传），down=出口→客户端（下载）。
 	BWUp   float64 `json:"bw_up"`
 	BWDown float64 `json:"bw_down"`

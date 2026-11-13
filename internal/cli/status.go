@@ -145,7 +145,7 @@ type ChannelSummary struct {
 	RTTMs  float64 `json:"rtt_ms"`
 	Succ   float64 `json:"succ"`
 	BWMbps float64 `json:"bw_mbps"`
-	// BWUp / BWDown 是实时上行/下行速率（Mbps，10 秒结算、无样本 0）。
+	// BWUp / BWDown 是实时上行/下行速率（Mbps，15 秒结算、无样本 0）。
 	BWUp   float64 `json:"bw_up"`
 	BWDown float64 `json:"bw_down"`
 	// PendingUp / PendingDown 是尚未结算的原始字节（诊断：

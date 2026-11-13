@@ -57,7 +57,7 @@ func TestChanConnTrafficFeedsEwma(t *testing.T) {
 	}
 
 	// 推进 11 秒结算（bytesAt 是创建时刻）
-	c.settleBW(time.Now().Add(11 * time.Second))
+	c.settleBW(time.Now().Add(16 * time.Second))
 
 	upRate, ok := c.bwUp.peek()
 	if !ok || upRate <= 0 {
@@ -80,9 +80,9 @@ func TestChanConnTrafficFeedsEwma(t *testing.T) {
 	// 10 秒内的二次结算应被门槛拦住（不产生新样本）
 	c.addUp(1024)
 	before, _ := c.bwUp.peek()
-	c.settleBW(time.Now().Add(11 * time.Second).Add(5 * time.Second)) // 距上次仅 5 秒
+	c.settleBW(time.Now().Add(16 * time.Second).Add(5 * time.Second)) // 距上次仅 5 秒
 	after, _ := c.bwUp.peek()
 	if after != before {
-		t.Fatalf("10 秒门槛应拦住二次结算: %v -> %v", before, after)
+		t.Fatalf("15 秒门槛应拦住二次结算: %v -> %v", before, after)
 	}
 }
