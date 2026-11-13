@@ -176,7 +176,11 @@ stop_service() {
 		done
 	done
 	ip rule del fwmark 0x100 lookup 100 2>/dev/null
-	ip route flush table 100 2>/dev/null
+	# ★ 只删 SLX 自己的路由（default dev slx0），**绝不整表 flush** ——
+	#   table 100 是公共表号：PassWall 也用它（mark 1 → table 100
+	#   存 local 0.0.0.0/0 dev lo），整表 flush 会把 PassWall 打挂
+	#   （2026-11-13 22:45 现场事故）。
+	ip route del default dev slx0 table 100 2>/dev/null
 	ipset destroy slx_cn 2>/dev/null
 	ipset destroy slx_exempt 2>/dev/null
 
